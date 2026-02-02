@@ -1,0 +1,8 @@
+miniaudio
+
+This SDK vendors miniaudio.h from the upstream project:
+  https://github.com/mackron/miniaudio
+
+Licensing:
+  miniaudio is released into the public domain (or alternatively under the MIT No Attribution license).
+  See the top of miniaudio.h for the authoritative license text.

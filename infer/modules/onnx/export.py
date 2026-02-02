@@ -26,6 +26,9 @@ def export_onnx(ModelPath, ExportedPath):
         "audio",
     ]
     # net_g.construct_spkmixmap(n_speaker) 多角色混合轨道导出
+    # 说明：Windows 上常见的 PyTorch ONNX 导出（torch.onnx.export）在较新 opset 下
+    # 可能触发 ReduceL2 等算子的 checker 兼容问题；这里使用更稳妥的 opset 12，
+    # 以便离线导出能在更多环境中跑通。
     torch.onnx.export(
         net_g,
         (
@@ -44,7 +47,7 @@ def export_onnx(ModelPath, ExportedPath):
             "rnd": [2],
         },
         do_constant_folding=False,
-        opset_version=18,
+        opset_version=12,
         verbose=False,
         input_names=input_names,
         output_names=output_names,

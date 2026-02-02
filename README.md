@@ -1,3 +1,12 @@
+# RVC-cpu
+
+本仓库是 `Retrieval-based-Voice-Conversion-WebUI` 的一个面向 **Windows / 运行时无 Python** 的分支，目标是提供可嵌入其它程序的实时变声 SDK（ONNXRuntime + FAISS，保留检索），同时支持 CPU-only 与 GPU（CUDA EP）。
+
+快速入口：
+- SDK 工程与构建/运行说明：`sdk/rvc_sdk_ort/README.md`
+- 一键构建：`scripts/build_rvc_sdk_ort.ps1`
+- 实时 demo：`build_rvc_sdk_ort/Release/rvc_sdk_ort_realtime.exe`
+
 <div align="center">
 
 <h1>Retrieval-based-Voice-Conversion-WebUI</h1>

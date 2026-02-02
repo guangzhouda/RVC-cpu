@@ -6,6 +6,12 @@ __pycache__
 /opt
 tools/aria2c/
 tools/flag.txt
+.idea/
+.codex/
+build_rvc_sdk_ort/
+deps/
+sdk/rvc_sdk_ort/dist/
+verification.md
 
 # Imported from huggingface.co/lj1995/VoiceConversionWebUI
 /pretrained
@@ -26,3 +32,4 @@ rmvpe.pt
 /assets/weights/*
 ffmpeg.*
 ffprobe.*
+.env
