@@ -413,50 +413,69 @@ bool RvcEngine::DetectSynthMode_(Error* err) {
   const int32_t flow_head = std::max<int32_t>(plan_.skip_head_frames - 24, 0);
   const int32_t T_flow = std::max<int32_t>(T - flow_head, 1);
 
-  size_t n_full = 0;
-  std::string e_full;
-  if (RunSynthProbe_(impl_->sess_synth.get(),
-                     impl_->syn_in_names,
-                     impl_->syn_out_names,
-                     cfg_.vec_dim,
-                     T,
-                     T,
-                     &n_full,
-                     &e_full)) {
-    impl_->synth_stream = false;
-    return true;
-  }
+  // 输出长度（以 model_sr 为基准）
+  const size_t expect_full = static_cast<size_t>(plan_.total_frames) * static_cast<size_t>(plan_.zc_model);
+  const size_t expect_stream = static_cast<size_t>(plan_.return_frames) * static_cast<size_t>(plan_.zc_model);
 
-  size_t n_stream = 0;
-  std::string e_stream;
-  if (RunSynthProbe_(impl_->sess_synth.get(),
-                     impl_->syn_in_names,
-                     impl_->syn_out_names,
-                     cfg_.vec_dim,
-                     T,
-                     T_flow,
-                     &n_stream,
-                     &e_stream)) {
-    impl_->synth_stream = true;
-
-    // stream 版导出应直接输出 return_frames 对应的波形长度（以 model_sr 为基准）
-    const size_t expect = static_cast<size_t>(plan_.return_frames) * static_cast<size_t>(plan_.zc_model);
-    if (n_stream != expect) {
-      // 说明：stream onnx 的 skip_head/return_length 在导出时被 tracing 固化，若运行时配置不同就会不匹配。
-      SetError(err,
-               24,
-               "stream synthesizer detected, but output length does not match current block/extra settings. "
-               "Please re-export stream onnx with matching skip_head_frames/return_length_frames, "
-               "or use the normal synthesizer.onnx.");
-      return false;
+  // 说明：当 skip_head < 24 时，T_flow == T，单纯通过 rnd_len 无法区分 full/stream。
+  // 因此这里以“输出长度”作为主判据（stream 导出只输出 return_length）。
+  size_t n0 = 0;
+  std::string e0;
+  const bool ok0 = RunSynthProbe_(impl_->sess_synth.get(),
+                                 impl_->syn_in_names,
+                                 impl_->syn_out_names,
+                                 cfg_.vec_dim,
+                                 T,
+                                 T,
+                                 &n0,
+                                 &e0);
+  if (ok0) {
+    if (n0 == expect_stream) {
+      impl_->synth_stream = true;
+      return true;
     }
-    return true;
+    if (n0 >= expect_full) {
+      impl_->synth_stream = false;
+      return true;
+    }
+    // ok0 但长度不匹配：继续尝试 T_flow（用于 skip_head>=24 或某些导出差异）
   }
 
-  SetError(err,
-           25,
-           std::string("failed to probe synthesizer mode. full_rnd_err=") + e_full +
-               " ; stream_rnd_err=" + e_stream);
+  size_t n1 = 0;
+  std::string e1;
+  const bool ok1 = RunSynthProbe_(impl_->sess_synth.get(),
+                                 impl_->syn_in_names,
+                                 impl_->syn_out_names,
+                                 cfg_.vec_dim,
+                                 T,
+                                 T_flow,
+                                 &n1,
+                                 &e1);
+  if (ok1) {
+    if (n1 == expect_stream) {
+      impl_->synth_stream = true;
+      return true;
+    }
+    if (n1 >= expect_full) {
+      impl_->synth_stream = false;
+      return true;
+    }
+  }
+
+  if (ok0 || ok1) {
+    std::string msg = "synthesizer output length mismatch (check your model_sr/block/extra/crossfade settings, "
+                      "or re-export stream onnx to match current config).";
+    msg += " n0=" + std::to_string(n0);
+    msg += " n1=" + std::to_string(n1);
+    msg += " expect_full=" + std::to_string(expect_full);
+    msg += " expect_stream=" + std::to_string(expect_stream);
+    msg += " T=" + std::to_string(T);
+    msg += " T_flow=" + std::to_string(T_flow);
+    SetError(err, 24, msg);
+    return false;
+  }
+
+  SetError(err, 25, std::string("failed to probe synthesizer mode. probe0_err=") + e0 + " ; probe1_err=" + e1);
   return false;
 }
 
