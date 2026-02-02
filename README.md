@@ -216,7 +216,3 @@ source /opt/intel/oneapi/setvars.sh
 + [Vocal pitch extraction:RMVPE](https://github.com/Dream-High/RMVPE)
   + The pretrained model is trained and tested by [yxlllc](https://github.com/yxlllc/RMVPE) and [RVC-Boss](https://github.com/RVC-Boss).
 
-## 感谢所有贡献者作出的努力
-<a href="https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI/graphs/contributors" target="_blank">
-  <img src="https://contrib.rocks/image?repo=RVC-Project/Retrieval-based-Voice-Conversion-WebUI" />
-</a>
