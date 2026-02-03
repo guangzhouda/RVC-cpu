@@ -28,7 +28,9 @@ typedef void* rvc_sdk_ort_handle_t;
 
 typedef enum rvc_sdk_ort_ep_t {
   RVC_SDK_ORT_EP_CPU = 0,
-  RVC_SDK_ORT_EP_CUDA = 1
+  RVC_SDK_ORT_EP_CUDA = 1,
+  // 说明：DirectML（Windows GPU 通用方案，适合不支持 CUDA kernel 的老卡）
+  RVC_SDK_ORT_EP_DML = 2
 } rvc_sdk_ort_ep_t;
 
 typedef enum rvc_sdk_ort_f0_method_t {

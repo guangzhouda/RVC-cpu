@@ -38,7 +38,7 @@ struct Args {
   std::string rmvpe;  // 可选：rmvpe.onnx（更稳定的 F0）
 
   bool list_devices = false;
-  bool use_cuda = false;
+  rvc_sdk_ort_ep_t ep = RVC_SDK_ORT_EP_CPU;
   int32_t cap_id = -1;  // 从 --list-devices 的 Capture devices 里选
   int32_t pb_id = -1;   // 从 --list-devices 的 Playback devices 里选
 
@@ -75,6 +75,7 @@ static void Usage() {
   std::printf("\nOptions:\n");
   std::printf("  --list-devices           List audio devices and exit\n");
   std::printf("  --cuda                   Use CUDA EP\n");
+  std::printf("  --dml                    Use DirectML EP (GPU)\n");
   std::printf("  --cap-id <n>             Capture device index (from --list-devices)\n");
   std::printf("  --pb-id <n>              Playback device index (from --list-devices)\n");
   std::printf("  --sid <n>                Speaker id (default 0)\n");
@@ -124,7 +125,9 @@ static bool ParseArgs(int argc, char** argv, Args* a) {
     } else if (std::strcmp(arg, "--list-devices") == 0) {
       a->list_devices = true;
     } else if (std::strcmp(arg, "--cuda") == 0) {
-      a->use_cuda = true;
+      a->ep = RVC_SDK_ORT_EP_CUDA;
+    } else if (std::strcmp(arg, "--dml") == 0) {
+      a->ep = RVC_SDK_ORT_EP_DML;
     } else if (std::strcmp(arg, "--cap-id") == 0 && i + 1 < argc) {
       if (!ParseInt(argv[++i], &a->cap_id)) return false;
     } else if (std::strcmp(arg, "--pb-id") == 0 && i + 1 < argc) {
@@ -311,6 +314,8 @@ static void WorkerLoop(RealtimeState* st) {
   constexpr uint64_t kStatBlocks = 20;
   uint64_t stat_blocks = 0;
   uint64_t stat_ns = 0;
+  // 仅在错误码变化时打印一次，避免刷屏影响实时性。
+  int32_t last_printed_err_code = 0;
   while (st->running.load(std::memory_order_relaxed)) {
     const ma_uint32 inAvail = ma_pcm_rb_available_read(&st->in_rb);
     const ma_uint32 outAvailW = ma_pcm_rb_available_write(&st->out_rb);
@@ -367,6 +372,10 @@ static void WorkerLoop(RealtimeState* st) {
       stat_blocks += 1;
       if (rc != 0) {
         st->last_err_code.store(err.code, std::memory_order_relaxed);
+        if (err.code != last_printed_err_code) {
+          last_printed_err_code = err.code;
+          std::fprintf(stderr, "[err] (%d) %s\n", (int)err.code, err.message);
+        }
         std::memset(st->block_out.data(), 0, sizeof(float) * bs);
       }
       PcmRbWrite(&st->out_rb, st->block_out.data(), bs, nullptr);
@@ -484,7 +493,7 @@ int main(int argc, char** argv) {
     cfg.sid = a.sid;
     cfg.f0_up_key = a.up_key;
     cfg.vec_dim = a.vec_dim;
-    cfg.ep = a.use_cuda ? RVC_SDK_ORT_EP_CUDA : RVC_SDK_ORT_EP_CPU;
+    cfg.ep = a.ep;
     cfg.intra_op_num_threads = a.threads;
     cfg.f0_min_hz = 50.0f;
     cfg.f0_max_hz = 1100.0f;
@@ -517,7 +526,10 @@ int main(int argc, char** argv) {
 
     bs = rvc_sdk_ort_get_block_size(h);
     std::printf("Realtime started. block_size=%d @ io_sr=%d\n", (int)bs, (int)a.io_sr);
-    std::printf("EP: %s\n", a.use_cuda ? "CUDA" : "CPU");
+    const char* ep_name = "CPU";
+    if (a.ep == RVC_SDK_ORT_EP_CUDA) ep_name = "CUDA";
+    if (a.ep == RVC_SDK_ORT_EP_DML) ep_name = "DML";
+    std::printf("EP: %s\n", ep_name);
     rvc_sdk_ort_runtime_info_t info{};
     if (rvc_sdk_ort_get_runtime_info(h, &info) == 0) {
       std::printf("Synth mode: %s (total_frames=%d return_frames=%d skip_head=%d)\n",

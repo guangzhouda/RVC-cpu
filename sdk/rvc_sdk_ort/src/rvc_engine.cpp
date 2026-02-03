@@ -31,6 +31,20 @@ static void SetError(Error* err, int32_t code, const std::string& msg) {
   err->message = msg;
 }
 
+#ifdef _WIN32
+static void* GetOrtExportOrNull_(const char* export_name) {
+  if (!export_name || export_name[0] == '\0') return nullptr;
+  // 说明：rvc_sdk_ort.dll 通过 import table 依赖 onnxruntime.dll，正常情况下这里一定能拿到句柄。
+  // 但为了稳妥（例如宿主延迟加载/自定义加载），这里允许回退到 LoadLibrary。
+  HMODULE mod = GetModuleHandleW(L"onnxruntime.dll");
+  if (!mod) {
+    mod = LoadLibraryW(L"onnxruntime.dll");
+  }
+  if (!mod) return nullptr;
+  return reinterpret_cast<void*>(GetProcAddress(mod, export_name));
+}
+#endif
+
 static float Pow2(float x) { return x * x; }
 
 static float SemitoneToRatio(int32_t semitone) {
@@ -261,22 +275,63 @@ bool RvcEngine::InitSessions_(Error* err) {
   }
 
   if (cfg_.ep == RVC_SDK_ORT_EP_CUDA) {
-    // 说明：ORT 1.17.x 的 Windows zip 已在 onnxruntime_c_api.h 中提供该函数声明，
-    // 不需要额外包含 cuda_provider_factory.h。
+#ifdef _WIN32
+    // 说明：不要在 link-time 直接引用 CUDA/DML 的 append 函数。
+    // - CUDA: onnxruntime-win-x64-gpu 的 onnxruntime.dll 导出 OrtSessionOptionsAppendExecutionProvider_CUDA
+    // - DML : onnxruntime-directml 的 onnxruntime.dll 导出 OrtSessionOptionsAppendExecutionProvider_DML
+    // 两种 onnxruntime.dll 的导出集合不同，直链会导致“换 DLL 就启动失败”。
+    using AppendFn = OrtStatus*(ORT_API_CALL*)(OrtSessionOptions*, int);
+    auto* fn = reinterpret_cast<AppendFn>(GetOrtExportOrNull_("OrtSessionOptionsAppendExecutionProvider_CUDA"));
+    if (!fn) {
+      SetError(err,
+               10,
+               "CUDA EP is not supported by current onnxruntime.dll (missing export OrtSessionOptionsAppendExecutionProvider_CUDA). "
+               "Please use onnxruntime-win-x64-gpu build, and ensure onnxruntime_providers_cuda.dll + "
+               "onnxruntime_providers_shared.dll are next to the executable (or in PATH).");
+      return false;
+    }
     const int device_id = 0;
-    OrtStatus* st = OrtSessionOptionsAppendExecutionProvider_CUDA(impl_->so, device_id);
+    OrtStatus* st = fn(impl_->so, device_id);
     if (st != nullptr) {
       // 把 ORT 的错误信息带出来，方便定位缺少哪些 DLL（常见：onnxruntime_providers_shared.dll / CUDA / cuDNN）。
       const char* msg = Ort::GetApi().GetErrorMessage(st);
       std::string detail = msg ? msg : "";
       Ort::GetApi().ReleaseStatus(st);
       std::string full = "Failed to enable CUDA EP in onnxruntime (OrtSessionOptionsAppendExecutionProvider_CUDA).";
-      if (!detail.empty()) {
-        full += " detail=" + detail;
-      }
+      if (!detail.empty()) full += " detail=" + detail;
       SetError(err, 10, full);
       return false;
     }
+#else
+    SetError(err, 10, "CUDA EP is only supported on Windows build in this repo.");
+    return false;
+#endif
+  } else if (cfg_.ep == RVC_SDK_ORT_EP_DML) {
+#ifdef _WIN32
+    using AppendFn = OrtStatus*(ORT_API_CALL*)(OrtSessionOptions*, int);
+    auto* fn = reinterpret_cast<AppendFn>(GetOrtExportOrNull_("OrtSessionOptionsAppendExecutionProvider_DML"));
+    if (!fn) {
+      SetError(err,
+               11,
+               "DirectML EP is not supported by current onnxruntime.dll (missing export OrtSessionOptionsAppendExecutionProvider_DML). "
+               "Please use Microsoft.ML.OnnxRuntime.DirectML runtime (onnxruntime.dll) next to the executable.");
+      return false;
+    }
+    const int device_id = 0;
+    OrtStatus* st = fn(impl_->so, device_id);
+    if (st != nullptr) {
+      const char* msg = Ort::GetApi().GetErrorMessage(st);
+      std::string detail = msg ? msg : "";
+      Ort::GetApi().ReleaseStatus(st);
+      std::string full = "Failed to enable DirectML EP in onnxruntime (OrtSessionOptionsAppendExecutionProvider_DML).";
+      if (!detail.empty()) full += " detail=" + detail;
+      SetError(err, 11, full);
+      return false;
+    }
+#else
+    SetError(err, 11, "DirectML EP is only supported on Windows.");
+    return false;
+#endif
   }
 
   return true;
