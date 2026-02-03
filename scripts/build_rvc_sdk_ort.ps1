@@ -35,6 +35,8 @@ $demoDir = "$buildDir/Release"
 if (Test-Path $demoDir) {
   Copy-Item -Force -Path "$ortRoot/lib/onnxruntime.dll" -Destination $demoDir -ErrorAction SilentlyContinue
   Copy-Item -Force -Path "$ortRoot/lib/onnxruntime_providers_cuda.dll" -Destination $demoDir -ErrorAction SilentlyContinue
+  # CUDA Provider 依赖 onnxruntime_providers_shared.dll，否则 --cuda 会直接启用失败
+  Copy-Item -Force -Path "$ortRoot/lib/onnxruntime_providers_shared.dll" -Destination $demoDir -ErrorAction SilentlyContinue
   Copy-Item -Force -Path "$faissRoot/bin/faiss.dll" -Destination $demoDir -ErrorAction SilentlyContinue
   Copy-Item -Force -Path "$faissRoot/bin/libblas.dll" -Destination $demoDir -ErrorAction SilentlyContinue
   Copy-Item -Force -Path "$faissRoot/bin/liblapack.dll" -Destination $demoDir -ErrorAction SilentlyContinue

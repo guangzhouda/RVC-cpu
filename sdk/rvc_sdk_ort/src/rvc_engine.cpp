@@ -266,8 +266,15 @@ bool RvcEngine::InitSessions_(Error* err) {
     const int device_id = 0;
     OrtStatus* st = OrtSessionOptionsAppendExecutionProvider_CUDA(impl_->so, device_id);
     if (st != nullptr) {
+      // 把 ORT 的错误信息带出来，方便定位缺少哪些 DLL（常见：onnxruntime_providers_shared.dll / CUDA / cuDNN）。
+      const char* msg = Ort::GetApi().GetErrorMessage(st);
+      std::string detail = msg ? msg : "";
       Ort::GetApi().ReleaseStatus(st);
-      SetError(err, 10, "Failed to enable CUDA EP in onnxruntime (OrtSessionOptionsAppendExecutionProvider_CUDA).");
+      std::string full = "Failed to enable CUDA EP in onnxruntime (OrtSessionOptionsAppendExecutionProvider_CUDA).";
+      if (!detail.empty()) {
+        full += " detail=" + detail;
+      }
+      SetError(err, 10, full);
       return false;
     }
   }

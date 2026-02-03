@@ -26,6 +26,7 @@ Copy-Item -Force -Path "$buildDir/rvc_sdk_ort_realtime.exe" -Destination "$outRo
 # Runtime deps (ORT + FAISS)
 Copy-Item -Force -Path "$buildDir/onnxruntime.dll" -Destination "$outRoot/bin/" -ErrorAction SilentlyContinue
 Copy-Item -Force -Path "$buildDir/onnxruntime_providers_cuda.dll" -Destination "$outRoot/bin/" -ErrorAction SilentlyContinue
+Copy-Item -Force -Path "$buildDir/onnxruntime_providers_shared.dll" -Destination "$outRoot/bin/" -ErrorAction SilentlyContinue
 
 Copy-Item -Force -Path "$buildDir/faiss.dll" -Destination "$outRoot/bin/" -ErrorAction SilentlyContinue
 Copy-Item -Force -Path "$buildDir/libblas.dll" -Destination "$outRoot/bin/" -ErrorAction SilentlyContinue
