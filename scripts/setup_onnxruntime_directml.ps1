@@ -1,5 +1,3 @@
-$ErrorActionPreference = "Stop"
-
 # Download and extract:
 # - Microsoft.ML.OnnxRuntime.DirectML (onnxruntime.dll with DML EP)
 # - Microsoft.AI.DirectML (DirectML.dll redistributable)
@@ -13,6 +11,8 @@ param(
   [string]$DirectMLVersion = "1.15.4"
 )
 
+$ErrorActionPreference = "Stop"
+
 function Download-NuGetNupkg([string]$PackageIdLower, [string]$Version, [string]$OutFile) {
   $url = "https://api.nuget.org/v3-flatcontainer/$PackageIdLower/$Version/$PackageIdLower.$Version.nupkg"
   Write-Host "Downloading $PackageIdLower $Version"
@@ -25,25 +25,28 @@ New-Item -ItemType Directory -Force -Path $downloads | Out-Null
 
 # 1) ORT DirectML
 $ortId = "microsoft.ml.onnxruntime.directml"
-$ortNupkg = Join-Path $downloads "onnxruntime-win-x64-directml-$OrtDirectMLVersion.nupkg"
-Download-NuGetNupkg -PackageIdLower $ortId -Version $OrtDirectMLVersion -OutFile $ortNupkg
+$ortZip = Join-Path $downloads "onnxruntime-win-x64-directml-$OrtDirectMLVersion.zip"
+if (!(Test-Path $ortZip)) {
+  Download-NuGetNupkg -PackageIdLower $ortId -Version $OrtDirectMLVersion -OutFile $ortZip
+}
 
 $ortDst = "deps/onnxruntime/onnxruntime-win-x64-directml-$OrtDirectMLVersion"
 if (Test-Path $ortDst) { Remove-Item -Recurse -Force $ortDst }
 New-Item -ItemType Directory -Force -Path $ortDst | Out-Null
-Expand-Archive -Path $ortNupkg -DestinationPath $ortDst -Force
+Expand-Archive -Path $ortZip -DestinationPath $ortDst -Force
 Write-Host "Extracted -> $ortDst"
 
 # 2) DirectML redistributable
 $dmlId = "microsoft.ai.directml"
-$dmlNupkg = Join-Path $downloads "directml-$DirectMLVersion.nupkg"
-Download-NuGetNupkg -PackageIdLower $dmlId -Version $DirectMLVersion -OutFile $dmlNupkg
+$dmlZip = Join-Path $downloads "directml-$DirectMLVersion.zip"
+if (!(Test-Path $dmlZip)) {
+  Download-NuGetNupkg -PackageIdLower $dmlId -Version $DirectMLVersion -OutFile $dmlZip
+}
 
 $dmlDst = "deps/directml/directml-$DirectMLVersion"
 if (Test-Path $dmlDst) { Remove-Item -Recurse -Force $dmlDst }
 New-Item -ItemType Directory -Force -Path $dmlDst | Out-Null
-Expand-Archive -Path $dmlNupkg -DestinationPath $dmlDst -Force
+Expand-Archive -Path $dmlZip -DestinationPath $dmlDst -Force
 Write-Host "Extracted -> $dmlDst"
 
 Write-Host "Done."
-
