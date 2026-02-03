@@ -42,3 +42,31 @@ if (Test-Path $demoDir) {
   Copy-Item -Force -Path "$faissRoot/bin/liblapack.dll" -Destination $demoDir -ErrorAction SilentlyContinue
   Write-Host "Staged runtime DLLs into: $demoDir"
 }
+
+# 额外：DirectML 运行时（用于老卡/非 CUDA 环境）
+# 说明：CUDA 版与 DML 版的 onnxruntime.dll 导出集合不同，不能放在同一目录下“二选一”。
+# 这里把 DML 运行时整理到 Release_dml，方便直接运行：
+#   build_rvc_sdk_ort/Release_dml/rvc_sdk_ort_realtime.exe --dml ...
+$dmlOrtRoot = "deps/onnxruntime/onnxruntime-win-x64-directml-1.17.1"
+$dmlOrtDll = Join-Path $dmlOrtRoot "runtimes/win-x64/native/onnxruntime.dll"
+$dmlDir = "$buildDir/Release_dml"
+if (Test-Path $demoDir -and (Test-Path $dmlOrtDll)) {
+  New-Item -ItemType Directory -Force -Path $dmlDir | Out-Null
+  Copy-Item -Force -Path "$demoDir/rvc_sdk_ort.dll" -Destination $dmlDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path "$demoDir/rvc_sdk_ort_realtime.exe" -Destination $dmlDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path "$demoDir/rvc_sdk_ort_demo.exe" -Destination $dmlDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path "$faissRoot/bin/faiss.dll" -Destination $dmlDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path "$faissRoot/bin/libblas.dll" -Destination $dmlDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path "$faissRoot/bin/liblapack.dll" -Destination $dmlDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path $dmlOrtDll -Destination $dmlDir -ErrorAction SilentlyContinue
+
+  # 可选：把 DirectML redistributable 带上，避免某些系统 DirectML.dll 版本过老导致 DML EP 初始化失败。
+  $directmlDll = Get-ChildItem -Path "deps/directml" -Recurse -Filter "DirectML.dll" -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -match "bin\\\\x64-win\\\\DirectML\\.dll$" } |
+    Select-Object -First 1
+  if ($directmlDll) {
+    Copy-Item -Force -Path $directmlDll.FullName -Destination $dmlDir -ErrorAction SilentlyContinue
+  }
+
+  Write-Host "Staged DirectML runtime into: $dmlDir"
+}

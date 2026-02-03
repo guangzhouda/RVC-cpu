@@ -1,38 +1,45 @@
 $ErrorActionPreference = "Stop"
 
-# Package the built artifacts into sdk/rvc_sdk_ort/dist/win-x64
+# Package the built artifacts into sdk/rvc_sdk_ort/dist/
 # 说明：该包用于“给别的程序用”的最小交付，不包含模型文件。
 
-$outRoot = "sdk/rvc_sdk_ort/dist/win-x64"
-$buildDir = "build_rvc_sdk_ort/Release"
+function Package-One([string]$BuildDir, [string]$OutRoot, [string]$RuntimeName) {
+  if (!(Test-Path $BuildDir)) {
+    throw "Build output not found: $BuildDir (run scripts/build_rvc_sdk_ort.ps1 first)."
+  }
 
-if (!(Test-Path $buildDir)) {
-  throw "Build output not found: $buildDir (run scripts/build_rvc_sdk_ort.ps1 first)."
+  New-Item -ItemType Directory -Force -Path "$OutRoot/bin", "$OutRoot/lib", "$OutRoot/include" | Out-Null
+
+  # Public headers
+  Copy-Item -Force -Path "sdk/rvc_sdk_ort/include/rvc_sdk_ort.h" -Destination "$OutRoot/include/"
+
+  # Import lib + DLL
+  Copy-Item -Force -Path "build_rvc_sdk_ort/Release/rvc_sdk_ort.lib" -Destination "$OutRoot/lib/" -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path "$BuildDir/rvc_sdk_ort.dll" -Destination "$OutRoot/bin/" -ErrorAction SilentlyContinue
+
+  # Demo binaries (optional)
+  Copy-Item -Force -Path "$BuildDir/rvc_sdk_ort_demo.exe" -Destination "$OutRoot/bin/" -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path "$BuildDir/rvc_sdk_ort_realtime.exe" -Destination "$OutRoot/bin/" -ErrorAction SilentlyContinue
+
+  # Runtime deps (ORT + FAISS)
+  Copy-Item -Force -Path "$BuildDir/onnxruntime.dll" -Destination "$OutRoot/bin/" -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path "$BuildDir/DirectML.dll" -Destination "$OutRoot/bin/" -ErrorAction SilentlyContinue
+
+  Copy-Item -Force -Path "$BuildDir/onnxruntime_providers_cuda.dll" -Destination "$OutRoot/bin/" -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path "$BuildDir/onnxruntime_providers_shared.dll" -Destination "$OutRoot/bin/" -ErrorAction SilentlyContinue
+
+  Copy-Item -Force -Path "$BuildDir/faiss.dll" -Destination "$OutRoot/bin/" -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path "$BuildDir/libblas.dll" -Destination "$OutRoot/bin/" -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path "$BuildDir/liblapack.dll" -Destination "$OutRoot/bin/" -ErrorAction SilentlyContinue
+
+  # Docs
+  Copy-Item -Force -Path "sdk/rvc_sdk_ort/README.md" -Destination "$OutRoot/"
+
+  Write-Host "Packaged ($RuntimeName) -> $OutRoot"
 }
 
-New-Item -ItemType Directory -Force -Path "$outRoot/bin", "$outRoot/lib", "$outRoot/include" | Out-Null
+Package-One -BuildDir "build_rvc_sdk_ort/Release" -OutRoot "sdk/rvc_sdk_ort/dist/win-x64-cuda" -RuntimeName "cuda"
 
-# Public headers
-Copy-Item -Force -Path "sdk/rvc_sdk_ort/include/rvc_sdk_ort.h" -Destination "$outRoot/include/"
-
-# Import lib + DLL
-Copy-Item -Force -Path "$buildDir/rvc_sdk_ort.lib" -Destination "$outRoot/lib/"
-Copy-Item -Force -Path "$buildDir/rvc_sdk_ort.dll" -Destination "$outRoot/bin/"
-
-# Demo binaries (optional)
-Copy-Item -Force -Path "$buildDir/rvc_sdk_ort_demo.exe" -Destination "$outRoot/bin/" -ErrorAction SilentlyContinue
-Copy-Item -Force -Path "$buildDir/rvc_sdk_ort_realtime.exe" -Destination "$outRoot/bin/" -ErrorAction SilentlyContinue
-
-# Runtime deps (ORT + FAISS)
-Copy-Item -Force -Path "$buildDir/onnxruntime.dll" -Destination "$outRoot/bin/" -ErrorAction SilentlyContinue
-Copy-Item -Force -Path "$buildDir/onnxruntime_providers_cuda.dll" -Destination "$outRoot/bin/" -ErrorAction SilentlyContinue
-Copy-Item -Force -Path "$buildDir/onnxruntime_providers_shared.dll" -Destination "$outRoot/bin/" -ErrorAction SilentlyContinue
-
-Copy-Item -Force -Path "$buildDir/faiss.dll" -Destination "$outRoot/bin/" -ErrorAction SilentlyContinue
-Copy-Item -Force -Path "$buildDir/libblas.dll" -Destination "$outRoot/bin/" -ErrorAction SilentlyContinue
-Copy-Item -Force -Path "$buildDir/liblapack.dll" -Destination "$outRoot/bin/" -ErrorAction SilentlyContinue
-
-# Docs
-Copy-Item -Force -Path "sdk/rvc_sdk_ort/README.md" -Destination "$outRoot/"
-
-Write-Host "Packaged -> $outRoot"
+if (Test-Path "build_rvc_sdk_ort/Release_dml") {
+  Package-One -BuildDir "build_rvc_sdk_ort/Release_dml" -OutRoot "sdk/rvc_sdk_ort/dist/win-x64-dml" -RuntimeName "dml"
+}
