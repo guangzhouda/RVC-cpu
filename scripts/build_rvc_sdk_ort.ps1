@@ -62,7 +62,7 @@ if ((Test-Path $demoDir) -and (Test-Path $dmlOrtDll)) {
 
   # 可选：把 DirectML redistributable 带上，避免某些系统 DirectML.dll 版本过老导致 DML EP 初始化失败。
   $directmlDll = Get-ChildItem -Path "deps/directml" -Recurse -Filter "DirectML.dll" -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -match "bin\\\\x64-win\\\\DirectML\\.dll$" } |
+    Where-Object { $_.FullName -like "*\bin\x64-win\DirectML.dll" } |
     Select-Object -First 1
   if ($directmlDll) {
     Copy-Item -Force -Path $directmlDll.FullName -Destination $dmlDir -ErrorAction SilentlyContinue
