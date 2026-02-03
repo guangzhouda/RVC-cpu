@@ -14,7 +14,9 @@ SDK 头文件：
 
 运行时依赖：
 - `rvc_sdk_ort.dll`
-- `onnxruntime.dll` +（如启用 CUDA EP）`onnxruntime_providers_cuda.dll` 及其依赖
+- `onnxruntime.dll`
+  - CUDA EP：需要 GPU 版 onnxruntime（`onnxruntime-win-x64-gpu-*`）以及 `onnxruntime_providers_cuda.dll` / `onnxruntime_providers_shared.dll`
+  - DirectML EP：需要 DirectML 版 onnxruntime（`Microsoft.ML.OnnxRuntime.DirectML` 的 `onnxruntime.dll`）以及系统/redistributable 的 `DirectML.dll`
 - `faiss` 相关 DLL（如果你选择动态链接）
 - 你的模型文件：`content_encoder.onnx`、`synthesizer.onnx`、`*.index`
 
@@ -129,12 +131,24 @@ build_rvc_sdk_ort/Release/rvc_sdk_ort_realtime.exe `
   --pb-id 1
 ```
 
+启用 GPU EP：
+- CUDA：在同目录有 CUDA 版 ORT DLL 时，加 `--cuda`。
+- DirectML：建议使用 `build_rvc_sdk_ort/Release_dml/` 目录下的 exe，并加 `--dml`（因为 CUDA 版与 DML 版的 `onnxruntime.dll` 不能共存于同一目录）。
+
+示例（DirectML）：
+```powershell
+build_rvc_sdk_ort/Release_dml/rvc_sdk_ort_realtime.exe --dml `
+  --enc "E:\RVC_models\test-rvc-onnx\vec-768-layer-12.onnx" `
+  --syn "E:\RVC_models\啊兰\alan_synthesizer.onnx" `
+  --index "E:\RVC_models\啊兰\added_IVF1210_Flat_nprobe_1_alan_v2.index"
+```
+
 提示：
 - 若 `--cap-id` 选麦克风但 `cap_cb=0`，通常是 Windows 麦克风隐私权限未放行（需要允许桌面应用访问麦克风）。
 - CPU-only 下如果跑不动，优先：
   - 使用“流式裁剪版” synthesizer.onnx（见下节 6.1）
   - 减小 `--extra-sec` / `--index-rate` / `--threads` 调参
-  - 或启用 `--cuda`
+  - 或启用 `--cuda` / `--dml`
 
 另外，`rvc_sdk_ort_realtime.exe` 默认会先 `--prefill-blocks 2` 再启动播放，用于减少启动瞬间的 underflow（会增加一点点启动延迟）。
 
