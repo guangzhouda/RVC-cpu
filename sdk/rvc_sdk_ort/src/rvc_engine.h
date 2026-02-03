@@ -56,7 +56,10 @@ class RvcEngine {
  bool Load(const std::string& content_encoder_onnx,
             const std::string& synthesizer_onnx,
             const std::string& faiss_index,
-            Error* err);
+             Error* err);
+
+  // 可选：加载 RMVPE（用于更稳定的实时 F0）。
+  bool LoadRmvpe(const std::string& rmvpe_onnx, Error* err);
 
   bool ProcessBlock(const float* in_mono,
                     int32_t in_frames,

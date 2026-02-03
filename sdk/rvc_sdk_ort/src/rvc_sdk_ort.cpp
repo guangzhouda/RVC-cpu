@@ -87,6 +87,30 @@ RVC_SDK_ORT_API int32_t rvc_sdk_ort_load(
   return 0;
 }
 
+RVC_SDK_ORT_API int32_t rvc_sdk_ort_load_rmvpe(
+    rvc_sdk_ort_handle_t h,
+    const char* rmvpe_onnx,
+    rvc_sdk_ort_error_t* err) {
+  ClearErr(err);
+  auto* engine = reinterpret_cast<rvc_ort::RvcEngine*>(h);
+  if (!engine) {
+    SetErr(err, -30, "handle is null");
+    return -30;
+  }
+  if (!rmvpe_onnx) {
+    SetErr(err, -31, "rmvpe_onnx path is null");
+    return -31;
+  }
+
+  rvc_ort::Error e;
+  const bool ok = engine->LoadRmvpe(rmvpe_onnx, &e);
+  if (!ok) {
+    SetErrFrom(err, e);
+    return e.code != 0 ? e.code : -32;
+  }
+  return 0;
+}
+
 RVC_SDK_ORT_API int32_t rvc_sdk_ort_get_block_size(rvc_sdk_ort_handle_t h) {
   auto* engine = reinterpret_cast<rvc_ort::RvcEngine*>(h);
   if (!engine) return 0;

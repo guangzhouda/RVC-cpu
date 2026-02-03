@@ -37,6 +37,9 @@ int main(int argc, char** argv) {
   cfg.f0_min_hz = 50.0f;
   cfg.f0_max_hz = 1100.0f;
   cfg.noise_scale = 0.66666f;
+  cfg.rms_mix_rate = 1.0f;
+  cfg.f0_method = RVC_SDK_ORT_F0_YIN;
+  cfg.rmvpe_threshold = 0.03f;
 
   rvc_sdk_ort_error_t err{};
   rvc_sdk_ort_handle_t h = rvc_sdk_ort_create(&cfg, &err);

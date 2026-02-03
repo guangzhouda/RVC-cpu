@@ -31,6 +31,13 @@ typedef enum rvc_sdk_ort_ep_t {
   RVC_SDK_ORT_EP_CUDA = 1
 } rvc_sdk_ort_ep_t;
 
+typedef enum rvc_sdk_ort_f0_method_t {
+  // 说明：YIN 简单可用，但短 block 下更容易抖动。
+  RVC_SDK_ORT_F0_YIN = 0,
+  // 说明：RMVPE 通常更稳，但需要额外加载 rmvpe.onnx（见 rvc_sdk_ort_load_rmvpe）。
+  RVC_SDK_ORT_F0_RMVPE = 1
+} rvc_sdk_ort_f0_method_t;
+
 typedef struct rvc_sdk_ort_error_t {
   int32_t code;               // 0 表示成功，其它为失败
   char message[512];          // 简短错误信息（UTF-8）
@@ -72,6 +79,18 @@ typedef struct rvc_sdk_ort_config_t {
   // - 值越小越“稳”，但可能更干、更少细节
   // - 建议范围：0.0 ~ 0.66666（默认 0.66666）
   float noise_scale;
+
+  // 音量包络混合（对齐 gui_v1.py 的 rms_mix_rate）
+  // - 取值范围：0~1
+  // - 1：不做混合（默认）
+  // - 越小：越倾向于把输出 RMS 拉回输入 RMS（可减少“静音段胡言乱语/喘声”）
+  float rms_mix_rate;
+
+  // F0 方法：默认 YIN；如选择 RMVPE，需额外调用 rvc_sdk_ort_load_rmvpe() 加载 rmvpe.onnx。
+  rvc_sdk_ort_f0_method_t f0_method;
+
+  // RMVPE decode 阈值（对齐 python：0.03）
+  float rmvpe_threshold;
 } rvc_sdk_ort_config_t;
 
 // 运行时信息（用于调试/性能分析；不影响主流程）
@@ -97,6 +116,13 @@ RVC_SDK_ORT_API int32_t rvc_sdk_ort_load(
   const char* content_encoder_onnx,   // 内容特征 ONNX（输入 16k wav，输出 [T,C] 或 [C,T]）
   const char* synthesizer_onnx,       // 生成模型 ONNX（来自本仓库导出脚本）
   const char* faiss_index,            // *.index（added_*.index）
+  rvc_sdk_ort_error_t* err
+);
+
+// 可选：加载 RMVPE（用于更稳定的实时 F0）。只有当 cfg.f0_method = RVC_SDK_ORT_F0_RMVPE 时才会用到。
+RVC_SDK_ORT_API int32_t rvc_sdk_ort_load_rmvpe(
+  rvc_sdk_ort_handle_t h,
+  const char* rmvpe_onnx,              // rmvpe.onnx（输入 log-mel，输出 salience）
   rvc_sdk_ort_error_t* err
 );
 

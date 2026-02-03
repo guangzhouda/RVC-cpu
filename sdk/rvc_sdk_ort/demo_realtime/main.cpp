@@ -35,6 +35,7 @@ struct Args {
   std::string enc;
   std::string syn;
   std::string index;
+  std::string rmvpe;  // 可选：rmvpe.onnx（更稳定的 F0）
 
   bool list_devices = false;
   bool use_cuda = false;
@@ -64,6 +65,8 @@ struct Args {
   float gain = 1.0f;          // passthrough 时的增益
   float gate_rms = 0.0f;      // 输入门限：低于该 RMS 则输出静音（用于避免“静音段胡言乱语”）
   float noise_scale = 0.66666f;  // 生成噪声强度（越小越稳）
+  float rms_mix_rate = 1.0f;     // 音量包络混合（1=关闭；对齐 gui_v1.py 的 rms_mix_rate）
+  float rmvpe_threshold = 0.03f; // RMVPE decode 阈值（对齐 python 默认）
 };
 
 static void Usage() {
@@ -91,6 +94,9 @@ static void Usage() {
   std::printf("  --gain <f>               Passthrough gain (default 1.0)\n");
   std::printf("  --gate-rms <f>           If input RMS < f, output silence (default 0 = off)\n");
   std::printf("  --noise-scale <f>        Synth noise scale (default 0.66666)\n");
+  std::printf("  --rms-mix-rate <f>       RMS envelope mix rate (0~1, default 1 = off)\n");
+  std::printf("  --rmvpe <path>           Use RMVPE F0 (load rmvpe.onnx)\n");
+  std::printf("  --rmvpe-threshold <f>    RMVPE decode threshold (default 0.03)\n");
 }
 
 static bool ParseInt(const char* s, int32_t* out) {
@@ -129,6 +135,8 @@ static bool ParseArgs(int argc, char** argv, Args* a) {
       a->syn = argv[++i];
     } else if (std::strcmp(arg, "--index") == 0 && i + 1 < argc) {
       a->index = argv[++i];
+    } else if (std::strcmp(arg, "--rmvpe") == 0 && i + 1 < argc) {
+      a->rmvpe = argv[++i];
     } else if (std::strcmp(arg, "--sid") == 0 && i + 1 < argc) {
       if (!ParseInt(argv[++i], &a->sid)) return false;
     } else if (std::strcmp(arg, "--index-rate") == 0 && i + 1 < argc) {
@@ -163,6 +171,10 @@ static bool ParseArgs(int argc, char** argv, Args* a) {
       if (!ParseFloat(argv[++i], &a->gate_rms)) return false;
     } else if (std::strcmp(arg, "--noise-scale") == 0 && i + 1 < argc) {
       if (!ParseFloat(argv[++i], &a->noise_scale)) return false;
+    } else if (std::strcmp(arg, "--rms-mix-rate") == 0 && i + 1 < argc) {
+      if (!ParseFloat(argv[++i], &a->rms_mix_rate)) return false;
+    } else if (std::strcmp(arg, "--rmvpe-threshold") == 0 && i + 1 < argc) {
+      if (!ParseFloat(argv[++i], &a->rmvpe_threshold)) return false;
     } else {
       std::printf("Unknown arg: %s\n", arg);
       return false;
@@ -328,7 +340,7 @@ static void WorkerLoop(RealtimeState* st) {
         }
         if (was_silent && !silent) {
           // 从静音恢复时，清空内部历史（避免上一段残留/叠加导致的“怪声”）
-          (void)rvc_sdk_ort_reset_state(st->h);
+          if (st->h) (void)rvc_sdk_ort_reset_state(st->h);
         }
       }
       if (st->passthrough) {
@@ -410,11 +422,14 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  if (a.enc.empty() || a.syn.empty() || a.index.empty()) {
-    std::printf("Missing required args.\n\n");
-    Usage();
-    ma_context_uninit(&ctx);
-    return 2;
+  // passthrough 仅用于验证 I/O 与电平，不需要任何模型/索引。
+  if (!a.passthrough) {
+    if (a.enc.empty() || a.syn.empty() || a.index.empty()) {
+      std::printf("Missing required args.\n\n");
+      Usage();
+      ma_context_uninit(&ctx);
+      return 2;
+    }
   }
 
   // 选择设备（默认设备或用户指定的 index）
@@ -454,47 +469,70 @@ int main(int argc, char** argv) {
     }
   }
 
-  // 1) 初始化 SDK
-  rvc_sdk_ort_config_t cfg{};
-  cfg.io_sample_rate = a.io_sr;
-  cfg.model_sample_rate = a.model_sr;
-  cfg.block_time_sec = a.block_sec;
-  cfg.crossfade_sec = a.crossfade_sec;
-  cfg.extra_sec = a.extra_sec;
-  cfg.index_rate = a.index_rate;
-  cfg.sid = a.sid;
-  cfg.f0_up_key = a.up_key;
-  cfg.vec_dim = a.vec_dim;
-  cfg.ep = a.use_cuda ? RVC_SDK_ORT_EP_CUDA : RVC_SDK_ORT_EP_CPU;
-  cfg.intra_op_num_threads = a.threads;
-  cfg.f0_min_hz = 50.0f;
-  cfg.f0_max_hz = 1100.0f;
-  cfg.noise_scale = a.noise_scale;
-
+  // 1) 初始化 SDK（passthrough 模式跳过）
   rvc_sdk_ort_error_t err{};
-  rvc_sdk_ort_handle_t h = rvc_sdk_ort_create(&cfg, &err);
-  if (!h) {
-    std::printf("create failed: (%d) %s\n", (int)err.code, err.message);
-    ma_context_uninit(&ctx);
-    return 1;
-  }
-  if (rvc_sdk_ort_load(h, a.enc.c_str(), a.syn.c_str(), a.index.c_str(), &err) != 0) {
-    std::printf("load failed: (%d) %s\n", (int)err.code, err.message);
-    rvc_sdk_ort_destroy(h);
-    ma_context_uninit(&ctx);
-    return 1;
-  }
+  rvc_sdk_ort_handle_t h = nullptr;
+  int32_t bs = 0;
+  if (!a.passthrough) {
+    rvc_sdk_ort_config_t cfg{};
+    cfg.io_sample_rate = a.io_sr;
+    cfg.model_sample_rate = a.model_sr;
+    cfg.block_time_sec = a.block_sec;
+    cfg.crossfade_sec = a.crossfade_sec;
+    cfg.extra_sec = a.extra_sec;
+    cfg.index_rate = a.index_rate;
+    cfg.sid = a.sid;
+    cfg.f0_up_key = a.up_key;
+    cfg.vec_dim = a.vec_dim;
+    cfg.ep = a.use_cuda ? RVC_SDK_ORT_EP_CUDA : RVC_SDK_ORT_EP_CPU;
+    cfg.intra_op_num_threads = a.threads;
+    cfg.f0_min_hz = 50.0f;
+    cfg.f0_max_hz = 1100.0f;
+    cfg.noise_scale = a.noise_scale;
+    cfg.rms_mix_rate = a.rms_mix_rate;
+    cfg.f0_method = a.rmvpe.empty() ? RVC_SDK_ORT_F0_YIN : RVC_SDK_ORT_F0_RMVPE;
+    cfg.rmvpe_threshold = a.rmvpe_threshold;
 
-  const int32_t bs = rvc_sdk_ort_get_block_size(h);
-  std::printf("Realtime started. block_size=%d @ io_sr=%d\n", (int)bs, (int)a.io_sr);
-  std::printf("EP: %s\n", a.use_cuda ? "CUDA" : "CPU");
-  rvc_sdk_ort_runtime_info_t info{};
-  if (rvc_sdk_ort_get_runtime_info(h, &info) == 0) {
-    std::printf("Synth mode: %s (total_frames=%d return_frames=%d skip_head=%d)\n",
-                info.synth_stream ? "stream" : "full",
-                (int)info.total_frames,
-                (int)info.return_frames,
-                (int)info.skip_head_frames);
+    h = rvc_sdk_ort_create(&cfg, &err);
+    if (!h) {
+      std::printf("create failed: (%d) %s\n", (int)err.code, err.message);
+      ma_context_uninit(&ctx);
+      return 1;
+    }
+    if (rvc_sdk_ort_load(h, a.enc.c_str(), a.syn.c_str(), a.index.c_str(), &err) != 0) {
+      std::printf("load failed: (%d) %s\n", (int)err.code, err.message);
+      rvc_sdk_ort_destroy(h);
+      ma_context_uninit(&ctx);
+      return 1;
+    }
+
+    if (!a.rmvpe.empty()) {
+      if (rvc_sdk_ort_load_rmvpe(h, a.rmvpe.c_str(), &err) != 0) {
+        std::printf("load rmvpe failed: (%d) %s\n", (int)err.code, err.message);
+        rvc_sdk_ort_destroy(h);
+        ma_context_uninit(&ctx);
+        return 1;
+      }
+    }
+
+    bs = rvc_sdk_ort_get_block_size(h);
+    std::printf("Realtime started. block_size=%d @ io_sr=%d\n", (int)bs, (int)a.io_sr);
+    std::printf("EP: %s\n", a.use_cuda ? "CUDA" : "CPU");
+    rvc_sdk_ort_runtime_info_t info{};
+    if (rvc_sdk_ort_get_runtime_info(h, &info) == 0) {
+      std::printf("Synth mode: %s (total_frames=%d return_frames=%d skip_head=%d)\n",
+                  info.synth_stream ? "stream" : "full",
+                  (int)info.total_frames,
+                  (int)info.return_frames,
+                  (int)info.skip_head_frames);
+    }
+  } else {
+    // passthrough：仅根据 io_sr/block_sec 计算 block_size（按 10ms 对齐）
+    const int32_t zc = (a.io_sr > 0) ? (a.io_sr / 100) : 0;
+    const int32_t block_frames = (int32_t)std::lround(a.block_sec * 100.0f);
+    bs = (zc > 0) ? std::max<int32_t>(zc, block_frames * zc) : 0;
+    std::printf("Realtime started. block_size=%d @ io_sr=%d\n", (int)bs, (int)a.io_sr);
+    std::printf("Mode: passthrough\n");
   }
 
   // 2) 初始化 ring buffers（用 miniaudio 的 lock-free ring buffer）
@@ -513,7 +551,7 @@ int main(int argc, char** argv) {
   if (ma_pcm_rb_init(ma_format_f32, 1, rbFrames, nullptr, nullptr, &st.in_rb) != MA_SUCCESS ||
       ma_pcm_rb_init(ma_format_f32, 1, rbFrames, nullptr, nullptr, &st.out_rb) != MA_SUCCESS) {
     std::printf("Failed to init ring buffers.\n");
-    rvc_sdk_ort_destroy(h);
+    if (h) rvc_sdk_ort_destroy(h);
     ma_context_uninit(&ctx);
     return 1;
   }
@@ -531,7 +569,7 @@ int main(int argc, char** argv) {
     std::printf("Failed to open capture device.\n");
     ma_pcm_rb_uninit(&st.in_rb);
     ma_pcm_rb_uninit(&st.out_rb);
-    rvc_sdk_ort_destroy(h);
+    if (h) rvc_sdk_ort_destroy(h);
     ma_context_uninit(&ctx);
     return 1;
   }
@@ -549,7 +587,7 @@ int main(int argc, char** argv) {
     ma_device_uninit(&captureDev);
     ma_pcm_rb_uninit(&st.in_rb);
     ma_pcm_rb_uninit(&st.out_rb);
-    rvc_sdk_ort_destroy(h);
+    if (h) rvc_sdk_ort_destroy(h);
     ma_context_uninit(&ctx);
     return 1;
   }
@@ -561,7 +599,7 @@ int main(int argc, char** argv) {
     ma_device_uninit(&captureDev);
     ma_pcm_rb_uninit(&st.in_rb);
     ma_pcm_rb_uninit(&st.out_rb);
-    rvc_sdk_ort_destroy(h);
+    if (h) rvc_sdk_ort_destroy(h);
     ma_context_uninit(&ctx);
     return 1;
   }
@@ -589,7 +627,7 @@ int main(int argc, char** argv) {
     ma_device_uninit(&captureDev);
     ma_pcm_rb_uninit(&st.in_rb);
     ma_pcm_rb_uninit(&st.out_rb);
-    rvc_sdk_ort_destroy(h);
+    if (h) rvc_sdk_ort_destroy(h);
     ma_context_uninit(&ctx);
     return 1;
   }
@@ -623,6 +661,6 @@ int main(int argc, char** argv) {
               (unsigned long long)st.underflow_frames.load(std::memory_order_relaxed),
               (int)st.last_err_code.load(std::memory_order_relaxed));
 
-  rvc_sdk_ort_destroy(h);
+  if (h) rvc_sdk_ort_destroy(h);
   return 0;
 }

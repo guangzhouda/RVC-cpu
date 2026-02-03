@@ -76,6 +76,9 @@ add_library(rvc_sdk_ort SHARED
   src/dsp/linear_resampler.cpp
   src/dsp/sola.cpp
   src/f0/yin_f0.cpp
+  src/f0/rmvpe_f0.cpp
+  third_party/kissfft/kiss_fft.c
+  third_party/kissfft/kiss_fftr.c
 )
 
 target_include_directories(rvc_sdk_ort
@@ -83,6 +86,7 @@ target_include_directories(rvc_sdk_ort
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
   PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/kissfft"
     "${ONNXRUNTIME_INCLUDE_DIR}"
     "${FAISS_INCLUDE_DIR}"
 )

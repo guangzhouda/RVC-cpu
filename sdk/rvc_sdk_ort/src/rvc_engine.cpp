@@ -3,6 +3,7 @@
 #include "rvc_engine.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <cstring>
 #ifdef _WIN32
@@ -11,6 +12,7 @@
 
 #include "dsp/linear_resampler.h"
 #include "dsp/sola.h"
+#include "f0/rmvpe_f0.h"
 #include "f0/yin_f0.h"
 
 // ORT
@@ -92,11 +94,14 @@ struct RvcEngine::Impl {
   Ort::SessionOptions so;
   std::unique_ptr<Ort::Session> sess_encoder;
   std::unique_ptr<Ort::Session> sess_synth;
+  std::unique_ptr<Ort::Session> sess_rmvpe;
 
   std::vector<std::string> enc_in_names;
   std::vector<std::string> enc_out_names;
   std::vector<std::string> syn_in_names;
   std::vector<std::string> syn_out_names;
+  std::vector<std::string> rmvpe_in_names;
+  std::vector<std::string> rmvpe_out_names;
 
   // synthesizer onnx 的推理模式：
   // - full: 输出整窗波形（需要在 C++ 侧裁剪 skip_head/return）且 rnd 的时间维度为 T
@@ -110,6 +115,9 @@ struct RvcEngine::Impl {
 
   // SOLA
   std::unique_ptr<Sola> sola;
+
+  // RMVPE（可选）
+  std::unique_ptr<RmvpeF0> rmvpe;
 };
 
 RvcEngine::RvcEngine(const rvc_sdk_ort_config_t& cfg)
@@ -225,6 +233,25 @@ static void CollectIO(Ort::Session& sess, std::vector<std::string>* in, std::vec
   }
 }
 
+static bool TryGetIntMetadata(Ort::Session& sess, const char* key, int32_t* out_v) {
+  if (!key || !out_v) return false;
+  try {
+    Ort::AllocatorWithDefaultOptions alloc;
+    Ort::ModelMetadata meta = sess.GetModelMetadata();
+    auto v = meta.LookupCustomMetadataMapAllocated(key, alloc);
+    if (!v) return false;
+    const char* s = v.get();
+    if (!s || s[0] == '\0') return false;
+    char* end = nullptr;
+    const long x = std::strtol(s, &end, 10);
+    if (end == s) return false;
+    *out_v = static_cast<int32_t>(x);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
 bool RvcEngine::InitSessions_(Error* err) {
   // SessionOptions
   impl_->so = Ort::SessionOptions();
@@ -283,9 +310,30 @@ bool RvcEngine::Load(const std::string& content_encoder_onnx,
     return false;
   }
 
-  // 判断 synthesizer 是否为“流式裁剪”导出版本（或普通版本）
-  if (!DetectSynthMode_(err)) {
-    return false;
+  // 优先读取 stream onnx 导出时写入的元数据：
+  // - 避免“配置不匹配时 probe 直接在图内报 Reshape 错误”
+  // - 同时能给出更明确的提示（stream onnx 基本是固定配置导出）
+  int32_t meta_skip = -1;
+  int32_t meta_ret = -1;
+  const bool has_meta_skip = TryGetIntMetadata(*impl_->sess_synth, "rvc_stream_skip_head_frames", &meta_skip);
+  const bool has_meta_ret = TryGetIntMetadata(*impl_->sess_synth, "rvc_stream_return_length_frames", &meta_ret);
+  if (has_meta_skip && has_meta_ret) {
+    if (meta_skip != plan_.skip_head_frames || meta_ret != plan_.return_frames) {
+      std::string msg = "stream synthesizer onnx metadata mismatch. ";
+      msg += "export_skip_head_frames=" + std::to_string(meta_skip);
+      msg += " export_return_length_frames=" + std::to_string(meta_ret);
+      msg += " ; runtime_skip_head_frames=" + std::to_string(plan_.skip_head_frames);
+      msg += " runtime_return_frames=" + std::to_string(plan_.return_frames);
+      msg += ". Please run with matching --block-sec/--extra-sec/--crossfade-sec, or re-export stream onnx.";
+      SetError(err, 24, msg);
+      return false;
+    }
+    impl_->synth_stream = true;
+  } else {
+    // 无元数据：回退到 probe（兼容旧模型/普通模型）
+    if (!DetectSynthMode_(err)) {
+      return false;
+    }
   }
 
   // FAISS index
@@ -312,6 +360,48 @@ bool RvcEngine::Load(const std::string& content_encoder_onnx,
     impl_->index->reconstruct_n(0, impl_->ntotal, impl_->big_npy.data());
   } catch (const std::exception& e) {
     SetError(err, 33, std::string("Failed to load faiss index: ") + e.what());
+    return false;
+  }
+
+  return true;
+}
+
+bool RvcEngine::LoadRmvpe(const std::string& rmvpe_onnx, Error* err) {
+  if (!impl_) {
+    SetError(err, 90, "engine impl is null.");
+    return false;
+  }
+  if (rmvpe_onnx.empty()) {
+    SetError(err, 91, "rmvpe_onnx path is empty.");
+    return false;
+  }
+  if (!impl_->sess_encoder || !impl_->sess_synth) {
+    // 说明：为了减少接口复杂度，这里要求先调用 rvc_sdk_ort_load() 初始化 ORT 环境与基本模型。
+    SetError(err, 92, "load rmvpe requires encoder/synth sessions (call rvc_sdk_ort_load first).");
+    return false;
+  }
+
+  try {
+#ifdef _WIN32
+    const std::wstring rmvpe_w = Utf8OrAcpToWide_(rmvpe_onnx);
+    impl_->sess_rmvpe = std::make_unique<Ort::Session>(impl_->env, rmvpe_w.c_str(), impl_->so);
+#else
+    impl_->sess_rmvpe = std::make_unique<Ort::Session>(impl_->env, rmvpe_onnx.c_str(), impl_->so);
+#endif
+  } catch (const Ort::Exception& e) {
+    SetError(err, 93, std::string("Failed to create RMVPE ORT session: ") + e.what());
+    return false;
+  }
+
+  CollectIO(*impl_->sess_rmvpe, &impl_->rmvpe_in_names, &impl_->rmvpe_out_names);
+  if (impl_->rmvpe_in_names.empty() || impl_->rmvpe_out_names.empty()) {
+    SetError(err, 94, "rmvpe.onnx must have at least 1 input and 1 output.");
+    return false;
+  }
+
+  impl_->rmvpe = std::make_unique<RmvpeF0>();
+  if (!impl_->rmvpe->Init(impl_->sess_rmvpe.get(), err)) {
+    // err 已填充
     return false;
   }
 
@@ -528,25 +618,60 @@ bool RvcEngine::ComputeF0WithCache_(int32_t p_len,
                                    std::vector<int64_t>* pitch,
                                    std::vector<float>* pitchf,
                                    Error* err) {
-  (void)err;
   // 计算最近一段的 f0，然后按 tools/rvc_for_realtime.py 的 cache 逻辑更新。
   //
-  // 这里采用 YIN（16k）：
-  // - segment_len = block_frames*160 + 800（与 python 一致的“额外上下文”）
-  // - pitch_len = segment_len/160 + 1
+  // 说明：
+  // - 本 SDK 支持两种 F0：YIN（简单可用）与 RMVPE（通常更稳）。
+  // - segment_len 参考 python：block_frames*160 + 800（与 tools/rvc_for_realtime.py 一致的“额外上下文”）
+  // - 输出长度习惯：segment_len/160 + 1（10ms 一帧）
 
-  const int32_t seg_len = plan_.block_frames * 160 + 800;
   const int32_t audio_len = static_cast<int32_t>(input_16k_.size());
+  // 说明：
+  // - 当 block 很小（例如 0.05~0.10s）时，`block_frames*160 + 800` 可能只有 0.1~0.2s，
+  //   YIN 会更容易抖动，进而导致“电音/喘声/胡言乱语”等伪影。
+  // - 这里给一个最小上下文（0.30s @ 16k = 4800 samples），在总缓冲足够时自动加长分析片段，
+  //   在不显著增加延迟的前提下提升短 block 的稳定性。
+  const int32_t base_seg_len = plan_.block_frames * 160 + 800;
+  const int32_t min_seg_len = 4800;
+  int32_t seg_len = std::min<int32_t>(audio_len, std::max<int32_t>(base_seg_len, min_seg_len));
+
+  // 对齐 python：rmvpe 常把音频长度对齐到 5120 的倍数（32 帧）以减少 padding 与边界不稳定。
+  if (cfg_.f0_method == RVC_SDK_ORT_F0_RMVPE) {
+    const int32_t want = std::max<int32_t>(base_seg_len, min_seg_len);
+    // 5120 samples = 32 frames * 160 hop；减 160 是为了让 n_frames = len/160 + 1 恰好是 32 的倍数。
+    const int32_t aligned = 5120 * ((want - 1) / 5120 + 1) - 160;
+    if (aligned > 0) {
+      seg_len = std::min<int32_t>(audio_len, aligned);
+    }
+  }
+
   const int32_t seg_start = std::max<int32_t>(0, audio_len - seg_len);
 
   std::vector<float> seg_f0;
-  ComputeF0Yin16k(input_16k_.data() + seg_start,
-                  audio_len - seg_start,
-                  16000,
-                  160,
-                  cfg_.f0_min_hz > 0.0f ? cfg_.f0_min_hz : 50.0f,
-                  cfg_.f0_max_hz > 0.0f ? cfg_.f0_max_hz : 1100.0f,
-                  &seg_f0);
+  if (cfg_.f0_method == RVC_SDK_ORT_F0_RMVPE) {
+    if (!impl_ || !impl_->rmvpe) {
+      SetError(err, 56, "F0 method is RMVPE but rmvpe.onnx is not loaded (call rvc_sdk_ort_load_rmvpe).");
+      return false;
+    }
+    const float th = (cfg_.rmvpe_threshold > 0.0f) ? cfg_.rmvpe_threshold : 0.03f;
+    if (!impl_->rmvpe->ComputeF0Hz(input_16k_.data() + seg_start, seg_len, th, &seg_f0, err)) {
+      return false;
+    }
+    // RMVPE 输出是全局范围，额外按 f0_min/f0_max 做一次裁剪，避免极端值影响后续模型。
+    const float f0_min = cfg_.f0_min_hz > 0.0f ? cfg_.f0_min_hz : 50.0f;
+    const float f0_max = cfg_.f0_max_hz > 0.0f ? cfg_.f0_max_hz : 1100.0f;
+    for (float& v : seg_f0) {
+      if (v < f0_min || v > f0_max) v = 0.0f;
+    }
+  } else {
+    ComputeF0Yin16k(input_16k_.data() + seg_start,
+                    seg_len,
+                    16000,
+                    160,
+                    cfg_.f0_min_hz > 0.0f ? cfg_.f0_min_hz : 50.0f,
+                    cfg_.f0_max_hz > 0.0f ? cfg_.f0_max_hz : 1100.0f,
+                    &seg_f0);
+  }
 
   // 变调
   const float ratio = SemitoneToRatio(cfg_.f0_up_key);
@@ -952,6 +1077,45 @@ bool RvcEngine::ProcessBlock(const float* in_mono,
   std::vector<float> infer_wav;
   if (!InferWindow_(&infer_wav, err)) {
     return false;
+  }
+
+  // 音量包络混合（可选）：把输出的 RMS 包络部分拉回输入，减少静音段“喘声/怪声”等伪影。
+  // 说明：这里做的是“每 10ms 一段”的简化版本（piecewise constant），避免引入复杂插值与额外依赖。
+  if (cfg_.rms_mix_rate >= 0.0f && cfg_.rms_mix_rate < 1.0f) {
+    const float mix = std::max<float>(0.0f, std::min<float>(1.0f, cfg_.rms_mix_rate));
+    const float exponent = 1.0f - mix;
+    const int32_t hop = plan_.zc_io;  // 10ms
+    const int32_t n = static_cast<int32_t>(infer_wav.size());
+    const int32_t frames = (hop > 0) ? (n / hop) : 0;
+    const int32_t in_start = plan_.skip_head_frames * plan_.zc_io;
+    const int32_t in_total = static_cast<int32_t>(input_io_.size());
+    if (hop > 0 && frames > 0 && frames * hop == n && in_start >= 0 && in_start + n <= in_total) {
+      const float* in_ref = input_io_.data() + in_start;
+      constexpr float kEps = 1e-3f;
+      for (int32_t f = 0; f < frames; ++f) {
+        const float* xin = in_ref + f * hop;
+        float* xout = infer_wav.data() + f * hop;
+        double s2_in = 0.0;
+        double s2_out = 0.0;
+        for (int32_t i = 0; i < hop; ++i) {
+          const float a = xin[i];
+          const float b = xout[i];
+          s2_in += (double)a * (double)a;
+          s2_out += (double)b * (double)b;
+        }
+        const float rms_in = (hop > 0) ? (float)std::sqrt(s2_in / (double)hop) : 0.0f;
+        float rms_out = (hop > 0) ? (float)std::sqrt(s2_out / (double)hop) : 0.0f;
+        if (rms_out < kEps) rms_out = kEps;
+        const float ratio = rms_in / rms_out;
+        // 限制缩放，避免极端情况下爆音/过度衰减
+        float scale = std::pow(std::max<float>(ratio, 0.0f), exponent);
+        if (scale > 8.0f) scale = 8.0f;
+        if (scale < 0.0f) scale = 0.0f;
+        for (int32_t i = 0; i < hop; ++i) {
+          xout[i] *= scale;
+        }
+      }
+    }
   }
 
   // infer_wav 长度应为 return_frames*zc_io >= sola_buffer + sola_search + block
