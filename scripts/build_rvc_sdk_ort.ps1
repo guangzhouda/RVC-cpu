@@ -50,7 +50,7 @@ if (Test-Path $demoDir) {
 $dmlOrtRoot = "deps/onnxruntime/onnxruntime-win-x64-directml-1.17.1"
 $dmlOrtDll = Join-Path $dmlOrtRoot "runtimes/win-x64/native/onnxruntime.dll"
 $dmlDir = "$buildDir/Release_dml"
-if (Test-Path $demoDir -and (Test-Path $dmlOrtDll)) {
+if ((Test-Path $demoDir) -and (Test-Path $dmlOrtDll)) {
   New-Item -ItemType Directory -Force -Path $dmlDir | Out-Null
   Copy-Item -Force -Path "$demoDir/rvc_sdk_ort.dll" -Destination $dmlDir -ErrorAction SilentlyContinue
   Copy-Item -Force -Path "$demoDir/rvc_sdk_ort_realtime.exe" -Destination $dmlDir -ErrorAction SilentlyContinue
