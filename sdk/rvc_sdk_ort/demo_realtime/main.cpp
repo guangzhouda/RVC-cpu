@@ -65,6 +65,17 @@ struct Args {
   bool print_latency = false; // 打印 ring buffer 队列估算延时（不含声卡/系统内部缓冲）
   float gain = 1.0f;          // passthrough 时的增益
   float gate_rms = 0.0f;      // 输入门限：低于该 RMS 则输出静音（用于避免“静音段胡言乱语”）
+
+  // 轻量“前置降噪/静音抑制”：逐 10ms 帧做 RMS 门控（更接近 WebUI realtime 的静音阈值逻辑）。
+  // 说明：这不是深度降噪（无法在你说话时把“旁人说话”彻底消掉），但能显著减少：
+  // - 静音段伪影（静音也在“赫赫/喘声/胡言乱语”）
+  // - 键盘/风扇等低电平噪声触发的误检
+  // 典型用法：先开 --print-levels 观察 raw_rms，再把 vad_rms 设到“底噪之上、说话之下”。
+  float vad_rms = 0.0f;       // 0=关闭；>0 启用逐帧门控（建议 0.01~0.03 起步）
+  float vad_floor = 0.0f;     // 静音段最小增益（0=全静音；例如 0.01 约 -40dB）
+  float vad_hold_ms = 150.0f;    // hangover：判无声后再“延迟关门”这么久（ms）
+  float vad_attack_ms = 10.0f;   // 开门时间常数（ms）
+  float vad_release_ms = 80.0f;  // 关门时间常数（ms）
   float noise_scale = 0.66666f;  // 生成噪声强度（越小越稳）
   float rms_mix_rate = 1.0f;     // 音量包络混合（1=关闭；对齐 gui_v1.py 的 rms_mix_rate）
   float rmvpe_threshold = 0.03f; // RMVPE decode 阈值（对齐 python 默认）
@@ -100,6 +111,11 @@ static void Usage() {
   std::printf("  --print-latency          Print in/out ring buffer queued time (debug)\n");
   std::printf("  --gain <f>               Passthrough gain (default 1.0)\n");
   std::printf("  --gate-rms <f>           If input RMS < f, output silence (default 0 = off)\n");
+  std::printf("  --vad-rms <f>            Frame VAD RMS threshold (10ms) to gate input (default 0 = off)\n");
+  std::printf("  --vad-floor <f>          VAD floor gain (0~1, default 0)\n");
+  std::printf("  --vad-hold-ms <f>        VAD hangover ms (default 150)\n");
+  std::printf("  --vad-attack-ms <f>      VAD attack ms (default 10)\n");
+  std::printf("  --vad-release-ms <f>     VAD release ms (default 80)\n");
   std::printf("  --noise-scale <f>        Synth noise scale (default 0.66666)\n");
   std::printf("  --rms-mix-rate <f>       RMS envelope mix rate (0~1, default 1 = off)\n");
   std::printf("  --rmvpe <path>           Use RMVPE F0 (load rmvpe.onnx)\n");
@@ -181,6 +197,16 @@ static bool ParseArgs(int argc, char** argv, Args* a) {
       if (!ParseFloat(argv[++i], &a->gain)) return false;
     } else if (std::strcmp(arg, "--gate-rms") == 0 && i + 1 < argc) {
       if (!ParseFloat(argv[++i], &a->gate_rms)) return false;
+    } else if (std::strcmp(arg, "--vad-rms") == 0 && i + 1 < argc) {
+      if (!ParseFloat(argv[++i], &a->vad_rms)) return false;
+    } else if (std::strcmp(arg, "--vad-floor") == 0 && i + 1 < argc) {
+      if (!ParseFloat(argv[++i], &a->vad_floor)) return false;
+    } else if (std::strcmp(arg, "--vad-hold-ms") == 0 && i + 1 < argc) {
+      if (!ParseFloat(argv[++i], &a->vad_hold_ms)) return false;
+    } else if (std::strcmp(arg, "--vad-attack-ms") == 0 && i + 1 < argc) {
+      if (!ParseFloat(argv[++i], &a->vad_attack_ms)) return false;
+    } else if (std::strcmp(arg, "--vad-release-ms") == 0 && i + 1 < argc) {
+      if (!ParseFloat(argv[++i], &a->vad_release_ms)) return false;
     } else if (std::strcmp(arg, "--noise-scale") == 0 && i + 1 < argc) {
       if (!ParseFloat(argv[++i], &a->noise_scale)) return false;
     } else if (std::strcmp(arg, "--rms-mix-rate") == 0 && i + 1 < argc) {
@@ -215,6 +241,95 @@ static void ComputeRmsPeak(const float* x, int32_t n, float* out_rms, float* out
   if (out_rms) *out_rms = rms;
   if (out_peak) *out_peak = peak;
 }
+
+static float ComputeRms(const float* x, int32_t n) {
+  if (!x || n <= 0) return 0.0f;
+  double s2 = 0.0;
+  for (int32_t i = 0; i < n; ++i) {
+    const float v = x[i];
+    s2 += (double)v * (double)v;
+  }
+  return (float)std::sqrt(s2 / (double)n);
+}
+
+static float MsToCoeff(float ms, int32_t sr) {
+  // 这里用一阶 IIR 平滑：y[n] = target + a * (y[n-1] - target)
+  // a = exp(-1/(tau*sr))，tau=ms/1000。
+  if (ms <= 0.0f || sr <= 0) return 0.0f;  // 0 表示“立即跟随”
+  const double tau = (double)ms / 1000.0;
+  const double denom = tau * (double)sr;
+  if (denom <= 1e-9) return 0.0f;
+  return (float)std::exp(-1.0 / denom);
+}
+
+struct VadGate {
+  int32_t sr = 0;
+  int32_t frame = 0;  // 每帧采样点数（固定按 10ms）
+  float rms_thr = 0.0f;
+  float floor_gain = 0.0f;
+  int32_t hold_left = 0;
+  int32_t hold_samples = 0;
+  float gain = 1.0f;
+  float attack_coeff = 0.0f;
+  float release_coeff = 0.0f;
+
+  bool Enabled() const { return (sr > 0) && (frame > 0) && (rms_thr > 0.0f); }
+
+  void Configure(int32_t sample_rate,
+                 float rms_threshold,
+                 float floor,
+                 float hold_ms,
+                 float attack_ms,
+                 float release_ms) {
+    sr = sample_rate;
+    frame = (sr > 0) ? std::max<int32_t>(1, sr / 100) : 0;  // 10ms
+    rms_thr = rms_threshold;
+    floor_gain = (floor < 0.0f) ? 0.0f : ((floor > 1.0f) ? 1.0f : floor);
+    const double hs = (double)hold_ms * (double)sr / 1000.0;
+    hold_samples = (hs > 0.0) ? (int32_t)std::lround(hs) : 0;
+    if (hold_samples < 0) hold_samples = 0;
+    hold_left = 0;
+    gain = 1.0f;
+    attack_coeff = MsToCoeff(attack_ms, sr);
+    release_coeff = MsToCoeff(release_ms, sr);
+  }
+
+  void Reset() {
+    hold_left = 0;
+    gain = 1.0f;
+  }
+
+  // 逐帧门控：对无声帧做衰减（同时做 attack/release 平滑）。
+  // 返回：该 block 内是否检测到“真有人声帧”（rms >= thr，不含 hangover）。
+  bool ProcessBlock(float* x, int32_t n) {
+    if (!Enabled() || !x || n <= 0) return true;
+
+    bool any_true_voiced = false;
+    for (int32_t off = 0; off < n; off += frame) {
+      const int32_t len = std::min<int32_t>(frame, n - off);
+      const float rms = ComputeRms(x + off, len);
+      const bool true_voiced = (rms >= rms_thr);
+      if (true_voiced) any_true_voiced = true;
+
+      bool gate_open = true_voiced;
+      if (true_voiced) {
+        hold_left = hold_samples;
+      } else if (hold_left > 0) {
+        gate_open = true;
+        hold_left -= len;
+        if (hold_left < 0) hold_left = 0;
+      }
+
+      const float target = gate_open ? 1.0f : floor_gain;
+      for (int32_t i = 0; i < len; ++i) {
+        const float a = (target > gain) ? attack_coeff : release_coeff;
+        gain = target + a * (gain - target);
+        x[off + i] *= gain;
+      }
+    }
+    return any_true_voiced;
+  }
+};
 
 static void ListDevices(ma_context* ctx) {
   ma_device_info* playback = nullptr;
@@ -291,6 +406,8 @@ struct RealtimeState {
   float gate_rms = 0.0f;
   float max_queue_sec = 0.0f;
   std::atomic<bool> in_silence{false};
+  VadGate vad;
+  float last_out_sample = 0.0f;
 
   ma_pcm_rb in_rb{};
   ma_pcm_rb out_rb{};
@@ -364,28 +481,56 @@ static void WorkerLoop(RealtimeState* st) {
 
       const auto t0 = std::chrono::steady_clock::now();
       int32_t rc = 0;
+
+      // 预先计算 raw 电平：用于 gate_rms 与调试打印（注意：后续 VAD 可能会修改 block_in）。
+      float raw_rms = 0.0f, raw_peak = 0.0f;
+      if (st->gate_rms > 0.0f || st->print_levels) {
+        ComputeRmsPeak(st->block_in.data(), (int32_t)bs, &raw_rms, &raw_peak);
+      }
+
       // gate：静音段直接输出 0，且在“静音 -> 开始说话”边界处重置 SDK 状态，避免残留伪影。
+      bool silent = false;
       if (st->gate_rms > 0.0f) {
-        float in_rms = 0.0f, in_peak = 0.0f;
-        ComputeRmsPeak(st->block_in.data(), (int32_t)bs, &in_rms, &in_peak);
-        const bool silent = (in_rms < st->gate_rms);
-        const bool was_silent = st->in_silence.load(std::memory_order_relaxed);
-        st->in_silence.store(silent, std::memory_order_relaxed);
-        if (silent) {
+        silent = (raw_rms < st->gate_rms);
+      }
+      // VAD gate：逐 10ms 帧衰减输入；若整个 block 都未检测到人声，则同样跳过推理并输出 0。
+      if (!silent && st->vad.Enabled()) {
+        const bool any_true_voiced = st->vad.ProcessBlock(st->block_in.data(), (int32_t)bs);
+        if (!any_true_voiced) {
+          silent = true;
+          // 强制关门：避免 hangover 把下一段“静音 block”误当成有声而继续跑推理。
+          st->vad.hold_left = 0;
+          st->vad.gain = st->vad.floor_gain;
+        }
+      }
+      const bool was_silent = st->in_silence.load(std::memory_order_relaxed);
+      st->in_silence.store(silent, std::memory_order_relaxed);
+      if (silent) {
+        // 轻微淡出，避免硬切造成爆点
+        const int32_t fade = (st->io_sr > 0) ? std::min<int32_t>((int32_t)bs, st->io_sr / 200) : 0;  // 5ms
+        if (fade > 0) {
+          const float last = st->last_out_sample;
+          for (int32_t i = 0; i < fade; ++i) {
+            const float t = (fade > 1) ? (float)(fade - 1 - i) / (float)(fade - 1) : 0.0f;
+            st->block_out[(size_t)i] = last * t;
+          }
+          std::memset(st->block_out.data() + fade, 0, sizeof(float) * ((size_t)bs - (size_t)fade));
+        } else {
           std::memset(st->block_out.data(), 0, sizeof(float) * bs);
-          PcmRbWrite(&st->out_rb, st->block_out.data(), bs, nullptr);
-          st->blocks.fetch_add(1, std::memory_order_relaxed);
-          const auto t1 = std::chrono::steady_clock::now();
-          const uint64_t dt_ns = static_cast<uint64_t>(
-              std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
-          stat_ns += dt_ns;
-          stat_blocks += 1;
-          continue;
         }
-        if (was_silent && !silent) {
-          // 从静音恢复时，清空内部历史（避免上一段残留/叠加导致的“怪声”）
-          if (st->h) (void)rvc_sdk_ort_reset_state(st->h);
-        }
+        st->last_out_sample = 0.0f;
+        PcmRbWrite(&st->out_rb, st->block_out.data(), bs, nullptr);
+        st->blocks.fetch_add(1, std::memory_order_relaxed);
+        const auto t1 = std::chrono::steady_clock::now();
+        const uint64_t dt_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
+        stat_ns += dt_ns;
+        stat_blocks += 1;
+        continue;
+      }
+      if (was_silent && !silent) {
+        // 从静音恢复时，清空内部历史（避免上一段残留/叠加导致的“怪声”）
+        if (st->h) (void)rvc_sdk_ort_reset_state(st->h);
       }
       if (st->passthrough) {
         // 直通：用于验证采集/播放链路本身是否正常
@@ -418,6 +563,9 @@ static void WorkerLoop(RealtimeState* st) {
         std::memset(st->block_out.data(), 0, sizeof(float) * bs);
       }
       PcmRbWrite(&st->out_rb, st->block_out.data(), bs, nullptr);
+      if (bs > 0) {
+        st->last_out_sample = st->block_out[(size_t)bs - 1];
+      }
       st->blocks.fetch_add(1, std::memory_order_relaxed);
 
       if (stat_blocks >= kStatBlocks) {
@@ -431,7 +579,9 @@ static void WorkerLoop(RealtimeState* st) {
           float out_rms = 0.0f, out_peak = 0.0f;
           ComputeRmsPeak(st->block_in.data(), (int32_t)bs, &in_rms, &in_peak);
           ComputeRmsPeak(st->block_out.data(), (int32_t)bs, &out_rms, &out_peak);
-          std::printf("[lvl] in_rms=%.4f in_peak=%.4f out_rms=%.4f out_peak=%.4f\n",
+          std::printf("[lvl] raw_rms=%.4f raw_peak=%.4f in_rms=%.4f in_peak=%.4f out_rms=%.4f out_peak=%.4f\n",
+                      raw_rms,
+                      raw_peak,
                       in_rms,
                       in_peak,
                       out_rms,
@@ -605,6 +755,9 @@ int main(int argc, char** argv) {
   st.gain = a.gain;
   st.gate_rms = a.gate_rms;
   st.max_queue_sec = a.max_queue_sec;
+  if (a.vad_rms > 0.0f) {
+    st.vad.Configure(a.io_sr, a.vad_rms, a.vad_floor, a.vad_hold_ms, a.vad_attack_ms, a.vad_release_ms);
+  }
   st.block_in.assign(static_cast<size_t>(bs), 0.0f);
   st.block_out.assign(static_cast<size_t>(bs), 0.0f);
 
