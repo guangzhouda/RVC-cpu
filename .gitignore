@@ -11,6 +11,7 @@ tools/flag.txt
 build_rvc_sdk_ort/
 deps/
 sdk/rvc_sdk_ort/dist/
+/dist_realtime_portable/
 verification.md
 /audio/
 /tmp/

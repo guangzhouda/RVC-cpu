@@ -151,6 +151,29 @@ powershell -ExecutionPolicy Bypass -File scripts/package_rvc_sdk_ort.ps1
 - `added_*.index`
 - 可选：`rmvpe.onnx`
 
+### 点击即用（把模型一起打包成“可双击运行”的文件夹）
+
+说明：
+- 由于模型/索引通常是几十~几百 MB，不建议“硬塞进 exe”；本仓库做的是 **portable 文件夹**：exe + dll + models/。
+- `rvc_sdk_ort_realtime.exe` 已支持：不传 `--enc/--syn/--index` 时，自动读取同目录 `rvc_realtime.ini`（或 `models/` 固定命名文件）。
+
+一键打包（示例：你当前验证最好的那套）：
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/package_rvc_realtime_portable.ps1 `
+  -Runtime cuda `
+  -Enc "E:\RVC_models\test-rvc-onnx\vec-768-layer-12.onnx" `
+  -Syn "E:\RVC_models\YaeMiko\bachongshenzi_synthesizer.onnx" `
+  -Index "E:\RVC_models\YaeMiko\added_IVF256_Flat_nprobe_1_bachongshenzi_v2.index" `
+  -Rmvpe "E:\RVC_models\test-rvc-onnx\rmvpe.onnx" `
+  -CapId 1 -PbId 2
+```
+
+产物目录：
+- `dist_realtime_portable\win-x64-cuda\`
+
+双击运行：
+- `dist_realtime_portable\win-x64-cuda\rvc_sdk_ort_realtime.exe`
+
 ### C/C++ 最小调用流程（示意）
 
 ```cpp

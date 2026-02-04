@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <thread>
 #include <vector>
@@ -26,12 +27,16 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#include <windows.h>
 #endif
 
 #define MINIAUDIO_IMPLEMENTATION
 #include "../third_party/miniaudio/miniaudio.h"
 
 struct Args {
+  // 可选：INI 配置文件（用于“点击即用”打包：不传任何参数也能启动）
+  std::string config;
+
   std::string enc;
   std::string syn;
   std::string index;
@@ -85,10 +90,172 @@ struct Args {
   float max_queue_sec = 0.0f;  // 0=关闭
 };
 
+static std::filesystem::path GetExeDir() {
+#ifdef _WIN32
+  wchar_t buf[MAX_PATH];
+  const DWORD n = GetModuleFileNameW(nullptr, buf, static_cast<DWORD>(sizeof(buf) / sizeof(buf[0])));
+  if (n == 0 || n >= (DWORD)(sizeof(buf) / sizeof(buf[0]))) {
+    return std::filesystem::current_path();
+  }
+  return std::filesystem::path(buf).parent_path();
+#else
+  return std::filesystem::current_path();
+#endif
+}
+
+static std::string PathToUtf8(const std::filesystem::path& p) {
+#ifdef _WIN32
+  // C++17: u8string() 返回 std::string（UTF-8）
+  return p.u8string();
+#else
+  return p.string();
+#endif
+}
+
+static std::string ResolveMaybeRelative(const std::filesystem::path& base, const std::string& s) {
+  if (s.empty()) return std::string();
+  std::filesystem::path p(s);
+  if (p.is_relative()) p = base / p;
+  return PathToUtf8(p.lexically_normal());
+}
+
+#ifdef _WIN32
+static bool IniGetString(const char* ini_path, const char* section, const char* key, std::string* out) {
+  if (!ini_path || !section || !key || !out) return false;
+  char buf[2048];
+  buf[0] = '\0';
+  const DWORD n = GetPrivateProfileStringA(section, key, "", buf, (DWORD)sizeof(buf), ini_path);
+  if (n == 0) return false;
+  *out = std::string(buf, buf + n);
+  return true;
+}
+
+static bool IniGetInt(const char* ini_path, const char* section, const char* key, int32_t* out) {
+  if (!ini_path || !section || !key || !out) return false;
+  char buf[64];
+  buf[0] = '\0';
+  const DWORD n = GetPrivateProfileStringA(section, key, "", buf, (DWORD)sizeof(buf), ini_path);
+  if (n == 0) return false;
+  char* end = nullptr;
+  long v = std::strtol(buf, &end, 10);
+  if (end == buf) return false;
+  *out = (int32_t)v;
+  return true;
+}
+
+static bool IniGetFloat(const char* ini_path, const char* section, const char* key, float* out) {
+  if (!ini_path || !section || !key || !out) return false;
+  char buf[64];
+  buf[0] = '\0';
+  const DWORD n = GetPrivateProfileStringA(section, key, "", buf, (DWORD)sizeof(buf), ini_path);
+  if (n == 0) return false;
+  char* end = nullptr;
+  float v = std::strtof(buf, &end);
+  if (end == buf) return false;
+  *out = v;
+  return true;
+}
+#endif
+
+static void ApplyIniConfigIfPresent(Args* a) {
+  if (!a) return;
+
+  // 仅在未提供必要模型参数时才读配置（避免影响命令行调参习惯）。
+  if (!a->passthrough && (!a->enc.empty() && !a->syn.empty() && !a->index.empty())) return;
+
+  const std::filesystem::path exe_dir = GetExeDir();
+  std::filesystem::path ini_path = exe_dir / "rvc_realtime.ini";
+  if (!a->config.empty()) {
+    std::filesystem::path p(a->config);
+    if (p.is_relative()) p = exe_dir / p;
+    ini_path = p;
+  }
+
+  if (!std::filesystem::exists(ini_path)) {
+    // 兜底：如果不存在 ini，但 models/ 下有固定命名文件，也允许直接双击运行。
+    const std::filesystem::path models = exe_dir / "models";
+    const std::filesystem::path enc = models / "content_encoder.onnx";
+    const std::filesystem::path syn = models / "synthesizer.onnx";
+    const std::filesystem::path idx0 = models / "retrieval.index";
+    const std::filesystem::path rmvpe = models / "rmvpe.onnx";
+    if (a->enc.empty() && std::filesystem::exists(enc)) a->enc = PathToUtf8(enc);
+    if (a->syn.empty() && std::filesystem::exists(syn)) a->syn = PathToUtf8(syn);
+    if (a->index.empty()) {
+      if (std::filesystem::exists(idx0)) {
+        a->index = PathToUtf8(idx0);
+      } else if (std::filesystem::exists(models) && std::filesystem::is_directory(models)) {
+        for (const auto& e : std::filesystem::directory_iterator(models)) {
+          if (e.is_regular_file() && e.path().extension() == ".index") {
+            a->index = PathToUtf8(e.path());
+            break;
+          }
+        }
+      }
+    }
+    if (a->rmvpe.empty() && std::filesystem::exists(rmvpe)) a->rmvpe = PathToUtf8(rmvpe);
+    return;
+  }
+
+#ifdef _WIN32
+  const std::string ini_u8 = PathToUtf8(ini_path);
+  const std::filesystem::path ini_dir = ini_path.parent_path();
+
+  // 模型文件
+  std::string s;
+  if (IniGetString(ini_u8.c_str(), "models", "enc", &s) && !s.empty()) a->enc = ResolveMaybeRelative(ini_dir, s);
+  if (IniGetString(ini_u8.c_str(), "models", "syn", &s) && !s.empty()) a->syn = ResolveMaybeRelative(ini_dir, s);
+  if (IniGetString(ini_u8.c_str(), "models", "index", &s) && !s.empty()) a->index = ResolveMaybeRelative(ini_dir, s);
+  if (IniGetString(ini_u8.c_str(), "models", "rmvpe", &s) && !s.empty()) {
+    const std::string p = ResolveMaybeRelative(ini_dir, s);
+#  ifdef _WIN32
+    if (std::filesystem::exists(std::filesystem::u8path(p))) {
+#  else
+    if (std::filesystem::exists(std::filesystem::path(p))) {
+#  endif
+      a->rmvpe = p;
+    } else {
+      a->rmvpe.clear();
+    }
+  }
+
+  // 设备/采样率
+  (void)IniGetInt(ini_u8.c_str(), "audio", "cap_id", &a->cap_id);
+  (void)IniGetInt(ini_u8.c_str(), "audio", "pb_id", &a->pb_id);
+  (void)IniGetInt(ini_u8.c_str(), "audio", "io_sr", &a->io_sr);
+
+  // 推理参数
+  (void)IniGetInt(ini_u8.c_str(), "rvc", "model_sr", &a->model_sr);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "block_sec", &a->block_sec);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "extra_sec", &a->extra_sec);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "crossfade_sec", &a->crossfade_sec);
+  (void)IniGetInt(ini_u8.c_str(), "rvc", "prefill_blocks", &a->prefill_blocks);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "index_rate", &a->index_rate);
+  (void)IniGetInt(ini_u8.c_str(), "rvc", "up_key", &a->up_key);
+  (void)IniGetInt(ini_u8.c_str(), "rvc", "threads", &a->threads);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "noise_scale", &a->noise_scale);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "rms_mix_rate", &a->rms_mix_rate);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "rmvpe_threshold", &a->rmvpe_threshold);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "vad_rms", &a->vad_rms);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "vad_floor", &a->vad_floor);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "vad_hold_ms", &a->vad_hold_ms);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "vad_attack_ms", &a->vad_attack_ms);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "vad_release_ms", &a->vad_release_ms);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "max_queue_sec", &a->max_queue_sec);
+
+  // EP（可选）：cpu/cuda/dml
+  if (IniGetString(ini_u8.c_str(), "rvc", "ep", &s) && !s.empty()) {
+    if (s == "cuda") a->ep = RVC_SDK_ORT_EP_CUDA;
+    if (s == "dml") a->ep = RVC_SDK_ORT_EP_DML;
+    if (s == "cpu") a->ep = RVC_SDK_ORT_EP_CPU;
+  }
+#endif
+}
+
 static void Usage() {
   std::printf("Usage:\n");
   std::printf("  rvc_sdk_ort_realtime --enc <vec-768-layer-12.onnx> --syn <synthesizer.onnx> --index <added_*.index> [options]\n");
   std::printf("\nOptions:\n");
+  std::printf("  --config <path>          Load INI config (default: exe_dir/rvc_realtime.ini when model args are omitted)\n");
   std::printf("  --list-devices           List audio devices and exit\n");
   std::printf("  --cuda                   Use CUDA EP\n");
   std::printf("  --dml                    Use DirectML EP (GPU)\n");
@@ -145,6 +312,8 @@ static bool ParseArgs(int argc, char** argv, Args* a) {
     const char* arg = argv[i];
     if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
       return false;
+    } else if (std::strcmp(arg, "--config") == 0 && i + 1 < argc) {
+      a->config = argv[++i];
     } else if (std::strcmp(arg, "--list-devices") == 0) {
       a->list_devices = true;
     } else if (std::strcmp(arg, "--cuda") == 0) {
@@ -616,6 +785,9 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  // “点击即用”打包：允许不传 --enc/--syn/--index，自动从 rvc_realtime.ini 或 models/ 补全。
+  ApplyIniConfigIfPresent(&a);
+
   ma_context ctx;
   if (ma_context_init(nullptr, 0, nullptr, &ctx) != MA_SUCCESS) {
     std::printf("Failed to init miniaudio context.\n");
@@ -631,7 +803,9 @@ int main(int argc, char** argv) {
   // passthrough 仅用于验证 I/O 与电平，不需要任何模型/索引。
   if (!a.passthrough) {
     if (a.enc.empty() || a.syn.empty() || a.index.empty()) {
-      std::printf("Missing required args.\n\n");
+      std::printf("Missing required args.\n");
+      std::printf("  - Provide --enc/--syn/--index, OR\n");
+      std::printf("  - Put rvc_realtime.ini next to the exe (or models/ with fixed names).\n\n");
       Usage();
       ma_context_uninit(&ctx);
       return 2;
