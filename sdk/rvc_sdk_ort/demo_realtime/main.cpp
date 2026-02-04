@@ -105,7 +105,7 @@ static void Usage() {
   std::printf("  --extra-sec <f>          Extra seconds for padding/history (default 0.5)\n");
   std::printf("  --threads <n>            ORT intra-op threads (default 4)\n");
   std::printf("  --seconds <n>            Auto stop after N seconds (default 0 = wait for Enter)\n");
-  std::printf("  --prefill-blocks <n>     Prefill N blocks before starting playback; also caps steady-state output queue (default 2)\n");
+  std::printf("  --prefill-blocks <n>     Prefill N blocks before starting playback (default 2)\n");
   std::printf("  --passthrough            Bypass model, just play captured audio (debug)\n");
   std::printf("  --print-levels           Print input/output RMS+Peak (debug)\n");
   std::printf("  --print-latency          Print in/out ring buffer queued time (debug)\n");
@@ -408,7 +408,6 @@ struct RealtimeState {
   std::atomic<bool> in_silence{false};
   VadGate vad;
   float last_out_sample = 0.0f;
-  ma_uint32 out_target_frames = 0;  // 目标输出排队量：避免推理线程跑太快导致延时越积越大
 
   ma_pcm_rb in_rb{};
   ma_pcm_rb out_rb{};
@@ -462,14 +461,6 @@ static void WorkerLoop(RealtimeState* st) {
   while (st->running.load(std::memory_order_relaxed)) {
     const ma_uint32 inAvail = ma_pcm_rb_available_read(&st->in_rb);
     const ma_uint32 outAvailW = ma_pcm_rb_available_write(&st->out_rb);
-    const ma_uint32 outQueued = ma_pcm_rb_available_read(&st->out_rb);
-
-    // 重要：如果推理比实时快（rt>1），不做限制会导致 out_rb 越积越多，延时越来越大。
-    // 这里用一个“目标排队量”把延时钳住：只在 outQueued 低于目标时才继续处理下一块。
-    if (st->out_target_frames > 0 && bs > 0 && outQueued >= st->out_target_frames) {
-      ma_sleep(1);
-      continue;
-    }
 
     // 如果输入队列积压太多，丢弃最旧的音频，把“延时增长”钳住。
     // 这是实时场景更实用的策略：宁可丢一点点，也不要延时越跑越大。
@@ -767,11 +758,6 @@ int main(int argc, char** argv) {
   if (a.vad_rms > 0.0f) {
     st.vad.Configure(a.io_sr, a.vad_rms, a.vad_floor, a.vad_hold_ms, a.vad_attack_ms, a.vad_release_ms);
   }
-  // 输出队列目标：用 prefill_blocks 作为“期望缓冲 block 数”（至少 1 block）。
-  // - 值越小延时越低，但更容易 underflow；值越大越稳，但延时更高。
-  // - 典型：prefill_blocks=0/1 低延时；2 稳定；更大通常没必要。
-  const int32_t out_blocks = std::max<int32_t>(1, a.prefill_blocks);
-  st.out_target_frames = static_cast<ma_uint32>(bs) * static_cast<ma_uint32>(out_blocks);
   st.block_in.assign(static_cast<size_t>(bs), 0.0f);
   st.block_out.assign(static_cast<size_t>(bs), 0.0f);
 

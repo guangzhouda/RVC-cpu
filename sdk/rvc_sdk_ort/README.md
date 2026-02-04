@@ -154,7 +154,6 @@ build_rvc_sdk_ort/Release_dml/rvc_sdk_ort_realtime.exe --dml `
   - 或启用 `--cuda` / `--dml`
 
 另外，`rvc_sdk_ort_realtime.exe` 默认会先 `--prefill-blocks 2` 再启动播放，用于减少启动瞬间的 underflow（会增加一点点启动延迟）。
-并且 realtime demo 会把输出 ring buffer 的排队量钳制到 `max(1, prefill-blocks)` 个 block，避免推理 `rt>1` 时“跑太快”导致延时越积越大。
 
 排查/低延时调参建议：
 - 看实时倍率：`rt>1` 才能长期稳定实时；`rt≈1` 容易出现 underflow/延时漂移/“赫赫声”。
