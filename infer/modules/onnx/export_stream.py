@@ -1,6 +1,14 @@
 import torch
 import onnx
-import onnxsim
+
+# 说明：
+# - onnxsim 依赖 onnxruntime 的 Python 轮子。
+# - 在一些环境下（例如 NumPy 2.x + 旧版 onnxruntime wheel），onnxruntime 可能因为 ABI 不兼容而无法导入。
+# - 简化并不是运行时必需步骤；导出失败时宁可跳过 simplify 也要把 onnx 导出来。
+try:
+    import onnxsim  # type: ignore
+except Exception:  # pragma: no cover
+    onnxsim = None
 
 from infer.lib.infer_pack.models import (
     SynthesizerTrnMs256NSFsid,
@@ -43,7 +51,13 @@ class _InferStreamWrapper(torch.nn.Module):
         return o
 
 
-def export_onnx_stream(ModelPath, ExportedPath, skip_head_frames=25, return_length_frames=55):
+def export_onnx_stream(
+    ModelPath,
+    ExportedPath,
+    skip_head_frames=25,
+    return_length_frames=55,
+    simplify_model=True,
+):
     """
     导出“流式裁剪”版 synthesizer.onnx（固定 skip_head/return_length）。
     参数单位：10ms 帧（与 realtime 逻辑一致）。
@@ -102,7 +116,15 @@ def export_onnx_stream(ModelPath, ExportedPath, skip_head_frames=25, return_leng
         output_names=output_names,
     )
 
-    model, _ = onnxsim.simplify(ExportedPath)
+    # 简化 onnx（可选）：失败时自动降级为不简化，保证能产出可用模型。
+    model = None
+    if simplify_model and onnxsim is not None:
+        try:
+            model, _ = onnxsim.simplify(ExportedPath)
+        except Exception:
+            model = None
+    if model is None:
+        model = onnx.load(ExportedPath)
 
     # 写入元数据，方便 C++ 侧校验“导出配置”和“运行配置”是否一致
     def _set_meta(k: str, v: int):
