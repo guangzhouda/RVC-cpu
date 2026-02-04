@@ -44,11 +44,11 @@
     --index "E:\RVC_models\YaeMiko\added_IVF256_Flat_nprobe_1_bachongshenzi_v2.index" `
     --rmvpe "E:\RVC_models\test-rvc-onnx\rmvpe.onnx" --rmvpe-threshold 0.03 `
     --cap-id 1 --pb-id 2 `
-    --block-sec 0.5 --extra-sec 0.25 --crossfade-sec 0.05 `
-    --prefill-blocks 2 `
-    --index-rate 0.1 --up-key 12 --threads 8 `
-    --rms-mix-rate 0.25 --noise-scale 0.2 `
-    --vad-rms 0.02 --vad-floor 0 `
+    --block-sec 0.25 --extra-sec 0.2 --crossfade-sec 0.05 `
+    --prefill-blocks 1 `
+    --index-rate 0.1 --up-key 6 --threads 8 `
+    --rms-mix-rate 1 --noise-scale 0.2 `
+    --vad-rms 0.02 --vad-floor 1 `
     --print-levels --print-latency --max-queue-sec 0.3
 ```
 

@@ -134,6 +134,22 @@ build_rvc_sdk_ort/Release/rvc_sdk_ort_realtime.exe `
   --pb-id 1
 ```
 
+推荐参数（CPU + RMVPE，兼顾延时与稳定；可直接复制）：
+```powershell
+build_rvc_sdk_ort/Release/rvc_sdk_ort_realtime.exe `
+  --enc "E:\RVC_models\test-rvc-onnx\vec-768-layer-12.onnx" `
+  --syn "E:\RVC_models\YaeMiko\bachongshenzi_synthesizer.onnx" `
+  --index "E:\RVC_models\YaeMiko\added_IVF256_Flat_nprobe_1_bachongshenzi_v2.index" `
+  --rmvpe "E:\RVC_models\test-rvc-onnx\rmvpe.onnx" --rmvpe-threshold 0.03 `
+  --cap-id 1 --pb-id 2 `
+  --block-sec 0.25 --extra-sec 0.2 --crossfade-sec 0.05 `
+  --prefill-blocks 1 `
+  --index-rate 0.1 --up-key 6 --threads 8 `
+  --rms-mix-rate 1 --noise-scale 0.2 `
+  --vad-rms 0.02 --vad-floor 1 `
+  --print-levels --print-latency --max-queue-sec 0.3
+```
+
 启用 GPU EP：
 - CUDA：在同目录有 CUDA 版 ORT DLL 时，加 `--cuda`。
 - DirectML：建议使用 `build_rvc_sdk_ort/Release_dml/` 目录下的 exe，并加 `--dml`（因为 CUDA 版与 DML 版的 `onnxruntime.dll` 不能共存于同一目录）。
