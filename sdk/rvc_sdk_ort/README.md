@@ -10,6 +10,9 @@
 SDK 头文件：
 - `sdk/rvc_sdk_ort/include/rvc_sdk_ort.h`
 
+API 文档（集成其它软件时看这个）：
+- `sdk/rvc_sdk_ort/API.md`
+
 ## 2. 运行时不需要 Python（但需要模型/索引文件）
 
 运行时依赖：
@@ -152,6 +155,11 @@ build_rvc_sdk_ort/Release_dml/rvc_sdk_ort_realtime.exe --dml `
 
 另外，`rvc_sdk_ort_realtime.exe` 默认会先 `--prefill-blocks 2` 再启动播放，用于减少启动瞬间的 underflow（会增加一点点启动延迟）。
 
+排查/低延时调参建议：
+- 看实时倍率：`rt>1` 才能长期稳定实时；`rt≈1` 容易出现 underflow/延时漂移/“赫赫声”。
+- 打印队列估算延时：加 `--print-latency`，观察 `in_q/out_q` 是否在持续增大（增大=跑不动或偶发卡顿）。
+- 钳住延时上限（宁可丢一点音频也不要越跑越慢）：加 `--max-queue-sec 0.3`（示例值），输入积压过多会丢弃最旧音频并重置状态。
+
 ### 6.1 导出“流式裁剪版” synthesizer.onnx（推荐用于 CPU 实时）
 
 本仓库新增导出脚本：`infer/modules/onnx/export_stream.py`。
@@ -178,6 +186,28 @@ build_rvc_sdk_ort/Release/rvc_sdk_ort_realtime.exe `
   --cap-id 2 --pb-id 1 `
   --block-sec 0.5 --extra-sec 0.25 --crossfade-sec 0.05 `
   --threads 8 --index-rate 0.1
+```
+
+### 6.2 离线 wav->wav 对比工具（定位“怪声”）
+
+可执行文件：
+- `build_rvc_sdk_ort/Release/rvc_sdk_ort_file.exe`
+
+用途：把同一段输入音频（wav）离线跑一遍 RVC 链路并输出 wav，便于对比：
+- **模型/索引是否本身就有伪影**（离线也有怪声）
+- **实时链路参数是否导致伪影**（离线干净、实时不干净）
+- 逐个 ablation：`--index-rate 0` / `--gate-rms` / `--rms-mix-rate` / `--noise-scale` / `--rmvpe`
+
+示例（使用 stream onnx 时，必须与导出时的 block/extra/crossfade 匹配）：
+```powershell
+build_rvc_sdk_ort/Release/rvc_sdk_ort_file.exe `
+  --enc "E:\RVC_models\test-rvc-onnx\vec-768-layer-12.onnx" `
+  --syn "E:\RVC_models\YaeMiko\bachongshenzi_stream.onnx" `
+  --index "E:\RVC_models\YaeMiko\added_IVF256_Flat_nprobe_1_bachongshenzi_v2.index" `
+  --in  "E:\test\in.wav" `
+  --out "E:\test\out.wav" `
+  --block-sec 0.5 --extra-sec 0.25 --crossfade-sec 0.05 `
+  --index-rate 0.1 --up-key 6 --threads 8
 ```
 
 ## 7. ONNX 量化（CPU 提速，离线一次性）

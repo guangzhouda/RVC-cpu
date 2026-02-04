@@ -52,6 +52,25 @@ sdk/rvc_sdk_ort/demo_realtime/main.cpp:279
   - `block`：该 block 在音频时间上的长度（ms）
   - `rt = block_ms / avg_ms`：实时倍率（**>1 表示能跑过实时**；例如 5x 表示比实时快 5 倍）
 - `[lvl] in_rms/in_peak/out_rms/out_peak`：输入/输出电平，用于确认“到底有没有采到声音/到底有没有输出”。
+- `[lat] in_q/out_q/est`（需加 `--print-latency`）：
+  - `in_q`：输入 ring buffer 里“等待被处理”的音频时长（ms）
+  - `out_q`：输出 ring buffer 里“已经处理好、等待播放”的音频时长（ms）
+  - `est = in_q + out_q`：**仅基于本进程 ring buffer 的估算**（不含声卡/系统内部缓冲），用于判断“延时是否在累积”。
+
+### 1.2 延时到底来自哪里？（为什么 block 很关键）
+
+你在耳机里听到的端到端延时，大致由这几部分叠加：
+
+- **分块等待**：必须先攒够 `block-sec` 才能处理一次
+- **预填充**：`prefill-blocks * block-sec`（为了减少启动 underflow，代价是启动延时变大）
+- **声卡/系统缓冲**：WASAPI 自己也会有 buffer（miniaudio 默认走低延时配置，但仍不可忽略）
+- **推理耗时**：若 `rt < 1`，就会出现 underflow/爆音/延时越积越大（“赫赫声”也常由此产生）
+
+实战建议：
+
+- 先用 `--print-latency` 看 `in_q/out_q` 是否在持续增大：增大=跑不动/偶发卡顿。
+- 低延时优先调 `--prefill-blocks`（1 或 0）与 `--block-sec`（0.25 -> 0.1）。
+- 如果 `rt` 接近 1，建议加 `--max-queue-sec 0.3` 这类上限，避免延时越跑越大（会丢一点音频，但更“实时”）。
 
 ---
 

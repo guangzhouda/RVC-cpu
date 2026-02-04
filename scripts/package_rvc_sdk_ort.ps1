@@ -34,6 +34,7 @@ function Package-One([string]$BuildDir, [string]$OutRoot, [string]$RuntimeName) 
 
   # Docs
   Copy-Item -Force -Path "sdk/rvc_sdk_ort/README.md" -Destination "$OutRoot/"
+  Copy-Item -Force -Path "sdk/rvc_sdk_ort/API.md" -Destination "$OutRoot/" -ErrorAction SilentlyContinue
 
   Write-Host "Packaged ($RuntimeName) -> $OutRoot"
 }
