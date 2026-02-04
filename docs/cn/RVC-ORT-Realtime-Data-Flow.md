@@ -70,6 +70,8 @@ sdk/rvc_sdk_ort/demo_realtime/main.cpp:438
 - **预填充**：`prefill-blocks * block-sec`（为了减少启动 underflow，代价是启动延时变大）
 - **声卡/系统缓冲**：WASAPI 自己也会有 buffer（miniaudio 默认走低延时配置，但仍不可忽略）
 - **推理耗时**：若 `rt < 1`，就会出现 underflow/爆音/延时越积越大（“赫赫声”也常由此产生）
+- **输出队列累积（重要）**：如果推理 `rt > 1`，推理线程可能“跑太快”，把 `out_rb` 填得很满，导致延时越来越大。  
+  现在 realtime demo 会把 `out_rb` 的排队量钳制到 `max(1, prefill-blocks)` 个 block（既能缓冲抖动，又避免无限增长）。
 
 实战建议：
 
