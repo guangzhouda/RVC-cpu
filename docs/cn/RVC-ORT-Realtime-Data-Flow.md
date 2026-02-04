@@ -18,17 +18,22 @@
         |
         v
 CaptureCallback() 仅写 ring buffer
-sdk/rvc_sdk_ort/demo_realtime/main.cpp:270
+sdk/rvc_sdk_ort/demo_realtime/main.cpp:429
         |
         v
 in_rb (ma_pcm_rb)
         |
         v
 WorkerLoop() 推理线程（不在音频回调里跑模型）
-sdk/rvc_sdk_ort/demo_realtime/main.cpp:306
+sdk/rvc_sdk_ort/demo_realtime/main.cpp:451
         |
         +--> (可选) --gate-rms：整 block RMS < gate -> 直接输出 0
         |               静音->有声边界调用 rvc_sdk_ort_reset_state()
+        |
+        +--> (可选) --vad-rms：逐 10ms 帧做 RMS 门控（前置静音抑制）
+        |               - 无声帧衰减到 --vad-floor（默认 0=全静音）
+        |               - 若整个 block 都未检测到“真有人声帧”，跳过推理直接输出 0
+        |               - 静音->有声边界同样会 reset_state()，减少残留伪影
         |
         +--> (可选) --passthrough：不跑模型，直接播输入（调试 I/O）
         |
@@ -39,7 +44,7 @@ out_rb (ma_pcm_rb)
         |
         v
 PlaybackCallback() 从 out_rb 读，不足则补 0（underflow）
-sdk/rvc_sdk_ort/demo_realtime/main.cpp:279
+sdk/rvc_sdk_ort/demo_realtime/main.cpp:438
         |
         v
 [WASAPI Playback 设备 @ io_sr, f32, mono]
@@ -176,7 +181,12 @@ out_mono[block_size_io] @ io_sr  -> clamp[-1,1]
    WebUI 用 torchaudio resampler，通常更高质量。
 
 3) **静音门控**：WebUI 可用 **逐 10ms 的 dB threshold** 置零静音帧；当前 demo 的 `--gate-rms` 是整 block RMS 门限，抑制不够“细”。  
-   当你的麦克风底噪较大、或开了“AI 降噪/回声消除”导致底噪不为 0 时，block 级 gate 很容易失效，从而出现“静音也在说话/赫赫声”。
+   现在 realtime demo 新增了 `--vad-rms`（逐 10ms 帧的 RMS 门控，前置静音抑制），更接近 WebUI realtime 的逻辑：  
+   - `--vad-rms` 建议起步 0.01~0.03（先开 `--print-levels` 看 `raw_rms`：把阈值设到“底噪之上、说话之下”）  
+   - `--vad-floor 0` 表示无声帧直接置零（对抑制静音伪影更有效）  
+   - `--vad-hold-ms/--vad-attack-ms/--vad-release-ms` 用于避免硬切造成的爆点/咔哒与门控抖动  
+
+   注意：这不是深度降噪，**无法在你说话时把旁人说话彻底消掉**（那属于源分离/更重的 SE 模型）；它主要解决的是“静音段被底噪触发 -> RVC 胡言乱语/赫赫声”。
 
 4) **stream synthesizer 是“固定配置导出”**：本仓库支持两类 synthesizer.onnx  
    - full：输出整窗（C++ 侧裁剪）  

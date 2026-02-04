@@ -159,6 +159,7 @@ build_rvc_sdk_ort/Release_dml/rvc_sdk_ort_realtime.exe --dml `
 - 看实时倍率：`rt>1` 才能长期稳定实时；`rt≈1` 容易出现 underflow/延时漂移/“赫赫声”。
 - 打印队列估算延时：加 `--print-latency`，观察 `in_q/out_q` 是否在持续增大（增大=跑不动或偶发卡顿）。
 - 钳住延时上限（宁可丢一点音频也不要越跑越慢）：加 `--max-queue-sec 0.3`（示例值），输入积压过多会丢弃最旧音频并重置状态。
+- 如果“静音也在说话/赫赫声”（底噪不为 0、或开了 AI 降噪/回声消除）：优先用 `--vad-rms`（逐 10ms 帧 RMS 门控）而不是只靠 `--gate-rms`（整 block 门控）。
 
 ### 6.1 导出“流式裁剪版” synthesizer.onnx（推荐用于 CPU 实时）
 

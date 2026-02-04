@@ -47,7 +47,8 @@
     --block-sec 0.5 --extra-sec 0.25 --crossfade-sec 0.05 `
     --prefill-blocks 2 `
     --index-rate 0.1 --up-key 12 --threads 8 `
-    --rms-mix-rate 0.25 --noise-scale 0.2 --gate-rms 0.01 `
+    --rms-mix-rate 0.25 --noise-scale 0.2 `
+    --vad-rms 0.02 --vad-floor 0 `
     --print-levels --print-latency --max-queue-sec 0.3
 ```
 
