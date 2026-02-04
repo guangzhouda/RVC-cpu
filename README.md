@@ -52,6 +52,67 @@
     --print-levels --print-latency --max-queue-sec 0.3
 ```
 
+### 参数怎么选：它们分别在解决什么问题（按你遇到过的症状整理）
+
+> 说明：上面命令的参数分两类：  
+> - **SDK 推理参数**（会进入 `rvc_sdk_ort_config_t`）：影响音质/延时/性能。  
+> - **demo 管线参数**（只在 `rvc_sdk_ort_realtime.exe` 里生效）：影响采集/播放/队列与调试输出。  
+
+**先排除“根本没采到声音 / 播不出来”**
+
+- `--cap-id / --pb-id`：修复“听不到声音 / 输入 RMS=0”  
+  - 先用 `--list-devices` 选对麦克风和播放设备。  
+  - 再用 `--passthrough --print-levels --prefill-blocks 0` 验证：`raw_rms` 应该随你说话明显变化；一直是 `0.0000` 基本就是设备/权限问题（Windows 麦克风隐私权限也要放行桌面应用）。
+- `--print-levels`（debug）：修复“我不知道到底有没有信号进来/出去”  
+  - `raw_*` 是“刚采到的原始电平”；`in_*` 是 gate/VAD 之后送进推理的电平；`out_*` 是最终播放电平。
+
+**降低延时 / 防止延时越跑越大**
+
+- `--block-sec`：基础延时与稳定性的核心旋钮  
+  - 过小（例如 0.1）容易出现“赫赫/颗粒感/抖动”，本质通常是 **F0 抖动 + SOLA 拼接更频繁 + 偶发跑慢**。  
+  - 你这台机器的甜点区是 `0.25`（`0.5` 更稳但延时更大）。
+- `--extra-sec`：上下文 padding（稳定音色/减少断裂），也是“延时和算力”的主要来源之一  
+  - 太小：更容易“口齿不清/颗粒感/拼接感”。  
+  - 太大：延时上去、CPU 更吃紧。  
+  - 你实测 `0.2` 是比较平衡的点。
+- `--prefill-blocks`（demo）：修复“刚启动时噼啪/断续/underflow”  
+  - 这是启动阶段的“先攒一点输出再开播”，会增加启动等待，但能明显减少开头爆音。你这里 `1` 合适。
+- `--max-queue-sec`（demo）：修复“刚开始还好，过一会延时越来越长”  
+  - 当推理偶发慢一拍，`in_q` 会越积越大；这个参数会在积压过大时 **丢弃最旧音频并 reset 状态**，把延时上限钳住（代价是偶发轻微丢帧感）。
+- `--print-latency`（debug）：看你当前“软件队列延时”有没有在漂  
+  - `[lat] est = in_q + out_q` 只是应用内部队列估算，不含声卡/系统额外缓冲；真实听感通常更大一点。
+
+**解决“静音也在说话/喘声/环境声触发怪音”**
+
+- `--vad-rms / --vad-floor`（demo）：轻量 RMS-VAD（逐 10ms 帧）  
+  - 你遇到的现象：不开口也会有声音、或者有旁人说话/键盘把模型“触发”。  
+  - `--vad-rms 0.02`：阈值，低于它的帧会被当成“无声帧”。  
+  - `--vad-floor 1`：你这里等价于“**只用 VAD 判整块是否全静音**，不对你说话时的输入做衰减”，能避免把咬字削糊。  
+  - 如果你想“更强抑制背景”，可以把 `vad-floor` 调到 `0.01~0.1`（会更干净，但更容易口齿不清，需要配合 hold/attack/release 细调；见 `sdk/rvc_sdk_ort/demo_realtime/main.cpp` 的参数说明）。
+- `--rmvpe / --rmvpe-threshold`：修复“音色不稳/跑调/变声效果差”  
+  - 你离线对比已经验证：加 RMVPE 后音色明显更对。  
+  - 阈值偏低可能更容易被噪声误触发；遇到抖动可试 `--rmvpe-threshold 0.05`。
+
+**解决“电流声 / 金属感 / 颗粒感”**
+
+- `--noise-scale`：修复“电流声/金属感”  
+  - 你已实测：`0.1` 会出现电流感，`0.2` 明显正常。  
+  - 一般不建议把它压得太低。
+- `--rms-mix-rate`：修复“喘声/音量不稳”或“颗粒感”  
+  - 值越小越会把输出能量往输入拉（可减静音段喘声），但也可能带来“颗粒/抽动”。  
+  - 你这条链路里 `1`（关闭混合）反而更自然。
+- `--crossfade-sec`：修复“拼接感/爆点”  
+  - 太小更容易有拼接颗粒；太大可能让清辅音变糊。你这里 `0.05` 是稳妥值。
+- `--index-rate`：修复“奇怪的声音/不是自己的内容/检索引入伪影”  
+  - 检索强度越大越“像目标音色”，但也越容易引入伪影。你实测 `0.1` 比较平衡。  
+  - 排查杂音来源时可先设 `--index-rate 0`（完全关闭检索融合）做 A/B。
+
+**其它常用参数**
+
+- `--up-key`：修复“男女声转换不对/音高不匹配”（半音数；男->女常见 +6~+12）。
+- `--threads`：修复“CPU 偶发卡顿/rt 接近 1 导致抖动”  
+  - 线程太多也可能引起调度抖动；你机器上 `8` 可用，遇到抖动可试 `4` 做对比。
+
 ### 48k 模型注意事项（例如 DuaLive）
 
 如果你的 `pth` 配置里 `config[-1]=48000`（模型采样率 48k），需要在运行时显式指定：
@@ -100,19 +161,19 @@ int main() {
   rvc_sdk_ort_config_t cfg{};
   cfg.io_sample_rate = 48000;
   cfg.model_sample_rate = 40000;     // 48k 模型请改成 48000
-  cfg.block_time_sec = 0.5f;
+  cfg.block_time_sec = 0.25f;
   cfg.crossfade_sec = 0.05f;
-  cfg.extra_sec = 0.25f;
+  cfg.extra_sec = 0.2f;
   cfg.index_rate = 0.1f;
   cfg.sid = 0;
-  cfg.f0_up_key = 12;
+  cfg.f0_up_key = 6;
   cfg.vec_dim = 768;
   cfg.ep = RVC_SDK_ORT_EP_CPU;       // 或 RVC_SDK_ORT_EP_CUDA / RVC_SDK_ORT_EP_DML
   cfg.intra_op_num_threads = 8;
   cfg.f0_min_hz = 50.0f;
   cfg.f0_max_hz = 1100.0f;
   cfg.noise_scale = 0.2f;
-  cfg.rms_mix_rate = 0.25f;
+  cfg.rms_mix_rate = 1.0f;
   cfg.f0_method = RVC_SDK_ORT_F0_RMVPE;
   cfg.rmvpe_threshold = 0.03f;
 
