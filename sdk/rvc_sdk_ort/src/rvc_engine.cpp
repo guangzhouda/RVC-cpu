@@ -1198,8 +1198,9 @@ bool RvcEngine::ProcessBlock(const float* in_mono,
                                           out_mono);
   (void)off;  // 调试时可记录
 
-  // 限幅（避免超出 [-1,1]）
+  // 限幅（避免超出 [-1,1]），并清理 NaN/Inf（某些 EP/模型异常时可能出现，避免直通到音频设备导致“无声/爆音”）
   for (int32_t i = 0; i < block; ++i) {
+    if (!std::isfinite(out_mono[i])) out_mono[i] = 0.0f;
     if (out_mono[i] > 1.0f) out_mono[i] = 1.0f;
     if (out_mono[i] < -1.0f) out_mono[i] = -1.0f;
   }

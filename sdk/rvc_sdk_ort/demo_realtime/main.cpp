@@ -62,11 +62,16 @@ struct Args {
   // 诊断选项：用于排查“听不到声音”到底是采集/播放问题还是模型问题
   bool passthrough = false;   // 直通：不跑模型，直接把采集到的音频播出去
   bool print_levels = false;  // 打印输入/输出音量（RMS/Peak）
+  bool print_latency = false; // 打印 ring buffer 队列估算延时（不含声卡/系统内部缓冲）
   float gain = 1.0f;          // passthrough 时的增益
   float gate_rms = 0.0f;      // 输入门限：低于该 RMS 则输出静音（用于避免“静音段胡言乱语”）
   float noise_scale = 0.66666f;  // 生成噪声强度（越小越稳）
   float rms_mix_rate = 1.0f;     // 音量包络混合（1=关闭；对齐 gui_v1.py 的 rms_mix_rate）
   float rmvpe_threshold = 0.03f; // RMVPE decode 阈值（对齐 python 默认）
+
+  // 如果推理偶尔跑慢（rt≈1 附近），输入队列会越积越多，导致“延时越来越大”。
+  // 该选项用于把延时上限钳住：当输入队列超过阈值时丢弃最旧的音频，并重置 SDK 状态。
+  float max_queue_sec = 0.0f;  // 0=关闭
 };
 
 static void Usage() {
@@ -92,12 +97,14 @@ static void Usage() {
   std::printf("  --prefill-blocks <n>     Prefill N blocks before starting playback (default 2)\n");
   std::printf("  --passthrough            Bypass model, just play captured audio (debug)\n");
   std::printf("  --print-levels           Print input/output RMS+Peak (debug)\n");
+  std::printf("  --print-latency          Print in/out ring buffer queued time (debug)\n");
   std::printf("  --gain <f>               Passthrough gain (default 1.0)\n");
   std::printf("  --gate-rms <f>           If input RMS < f, output silence (default 0 = off)\n");
   std::printf("  --noise-scale <f>        Synth noise scale (default 0.66666)\n");
   std::printf("  --rms-mix-rate <f>       RMS envelope mix rate (0~1, default 1 = off)\n");
   std::printf("  --rmvpe <path>           Use RMVPE F0 (load rmvpe.onnx)\n");
   std::printf("  --rmvpe-threshold <f>    RMVPE decode threshold (default 0.03)\n");
+  std::printf("  --max-queue-sec <f>      Drop old capture audio if input queue exceeds f seconds (default 0 = off)\n");
 }
 
 static bool ParseInt(const char* s, int32_t* out) {
@@ -168,6 +175,8 @@ static bool ParseArgs(int argc, char** argv, Args* a) {
       a->passthrough = true;
     } else if (std::strcmp(arg, "--print-levels") == 0) {
       a->print_levels = true;
+    } else if (std::strcmp(arg, "--print-latency") == 0) {
+      a->print_latency = true;
     } else if (std::strcmp(arg, "--gain") == 0 && i + 1 < argc) {
       if (!ParseFloat(argv[++i], &a->gain)) return false;
     } else if (std::strcmp(arg, "--gate-rms") == 0 && i + 1 < argc) {
@@ -178,6 +187,8 @@ static bool ParseArgs(int argc, char** argv, Args* a) {
       if (!ParseFloat(argv[++i], &a->rms_mix_rate)) return false;
     } else if (std::strcmp(arg, "--rmvpe-threshold") == 0 && i + 1 < argc) {
       if (!ParseFloat(argv[++i], &a->rmvpe_threshold)) return false;
+    } else if (std::strcmp(arg, "--max-queue-sec") == 0 && i + 1 < argc) {
+      if (!ParseFloat(argv[++i], &a->max_queue_sec)) return false;
     } else {
       std::printf("Unknown arg: %s\n", arg);
       return false;
@@ -257,14 +268,28 @@ static ma_uint32 PcmRbRead(ma_pcm_rb* rb, float* dst, ma_uint32 frames) {
   return got;
 }
 
+static void PcmRbDrop(ma_pcm_rb* rb, ma_uint32 frames) {
+  while (frames > 0) {
+    ma_uint32 n = frames;
+    void* p = nullptr;
+    if (ma_pcm_rb_acquire_read(rb, &n, &p) != MA_SUCCESS || n == 0 || p == nullptr) {
+      break;
+    }
+    ma_pcm_rb_commit_read(rb, n);
+    frames -= n;
+  }
+}
+
 struct RealtimeState {
   rvc_sdk_ort_handle_t h = nullptr;
   int32_t block_size = 0;
   int32_t io_sr = 0;
   bool passthrough = false;
   bool print_levels = false;
+  bool print_latency = false;
   float gain = 1.0f;
   float gate_rms = 0.0f;
+  float max_queue_sec = 0.0f;
   std::atomic<bool> in_silence{false};
 
   ma_pcm_rb in_rb{};
@@ -319,6 +344,20 @@ static void WorkerLoop(RealtimeState* st) {
   while (st->running.load(std::memory_order_relaxed)) {
     const ma_uint32 inAvail = ma_pcm_rb_available_read(&st->in_rb);
     const ma_uint32 outAvailW = ma_pcm_rb_available_write(&st->out_rb);
+
+    // 如果输入队列积压太多，丢弃最旧的音频，把“延时增长”钳住。
+    // 这是实时场景更实用的策略：宁可丢一点点，也不要延时越跑越大。
+    if (st->max_queue_sec > 0.0f && st->io_sr > 0) {
+      const double max_frames_f = st->max_queue_sec * (double)st->io_sr;
+      const ma_uint32 max_frames = (max_frames_f > 0.0) ? (ma_uint32)std::lround(max_frames_f) : 0;
+      if (max_frames > bs && inAvail > max_frames) {
+        const ma_uint32 drop = inAvail - max_frames;
+        PcmRbDrop(&st->in_rb, drop);
+        if (st->h) (void)rvc_sdk_ort_reset_state(st->h);
+        continue;
+      }
+    }
+
     if (inAvail >= bs && outAvailW >= bs) {
       (void)PcmRbRead(&st->in_rb, st->block_in.data(), bs);
       rvc_sdk_ort_error_t err{};
@@ -397,6 +436,14 @@ static void WorkerLoop(RealtimeState* st) {
                       in_peak,
                       out_rms,
                       out_peak);
+        }
+        if (st->print_latency && st->io_sr > 0) {
+          const ma_uint32 in_q = ma_pcm_rb_available_read(&st->in_rb);
+          const ma_uint32 out_q = ma_pcm_rb_available_read(&st->out_rb);
+          const double sr = (double)st->io_sr;
+          const double in_ms = (double)in_q * 1000.0 / sr;
+          const double out_ms = (double)out_q * 1000.0 / sr;
+          std::printf("[lat] in_q=%.1f ms out_q=%.1f ms est=%.1f ms\n", in_ms, out_ms, in_ms + out_ms);
         }
         std::printf("[perf] avg process_block=%.2f ms (block=%.2f ms, rt=%.2fx) blocks=%llu\n",
                     avg_ms,
@@ -554,8 +601,10 @@ int main(int argc, char** argv) {
   st.io_sr = a.io_sr;
   st.passthrough = a.passthrough;
   st.print_levels = a.print_levels;
+  st.print_latency = a.print_latency;
   st.gain = a.gain;
   st.gate_rms = a.gate_rms;
+  st.max_queue_sec = a.max_queue_sec;
   st.block_in.assign(static_cast<size_t>(bs), 0.0f);
   st.block_out.assign(static_cast<size_t>(bs), 0.0f);
 

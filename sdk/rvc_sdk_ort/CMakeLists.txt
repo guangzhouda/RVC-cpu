@@ -8,6 +8,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(RVC_SDK_ORT_BUILD_DEMO "Build demo app" ON)
 option(RVC_SDK_ORT_BUILD_REALTIME_DEMO "Build realtime demo app (miniaudio)" ON)
+option(RVC_SDK_ORT_BUILD_FILE_DEMO "Build wav-to-wav demo app (miniaudio)" ON)
 
 # ---- Dependencies (prebuilt) ----
 # 为了避免强依赖特定包管理器，这里采用“指定 ROOT 路径”的方式查找。
@@ -133,4 +134,16 @@ if(RVC_SDK_ORT_BUILD_REALTIME_DEMO)
       "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio"
   )
   target_link_libraries(rvc_sdk_ort_realtime PRIVATE rvc_sdk_ort)
+endif()
+
+if(RVC_SDK_ORT_BUILD_FILE_DEMO)
+  add_executable(rvc_sdk_ort_file
+    demo_file/main.cpp
+  )
+  target_include_directories(rvc_sdk_ort_file
+    PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/include"
+      "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio"
+  )
+  target_link_libraries(rvc_sdk_ort_file PRIVATE rvc_sdk_ort)
 endif()

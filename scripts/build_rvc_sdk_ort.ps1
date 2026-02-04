@@ -55,6 +55,7 @@ if ((Test-Path $demoDir) -and (Test-Path $dmlOrtDll)) {
   Copy-Item -Force -Path "$demoDir/rvc_sdk_ort.dll" -Destination $dmlDir -ErrorAction SilentlyContinue
   Copy-Item -Force -Path "$demoDir/rvc_sdk_ort_realtime.exe" -Destination $dmlDir -ErrorAction SilentlyContinue
   Copy-Item -Force -Path "$demoDir/rvc_sdk_ort_demo.exe" -Destination $dmlDir -ErrorAction SilentlyContinue
+  Copy-Item -Force -Path "$demoDir/rvc_sdk_ort_file.exe" -Destination $dmlDir -ErrorAction SilentlyContinue
   Copy-Item -Force -Path "$faissRoot/bin/faiss.dll" -Destination $dmlDir -ErrorAction SilentlyContinue
   Copy-Item -Force -Path "$faissRoot/bin/libblas.dll" -Destination $dmlDir -ErrorAction SilentlyContinue
   Copy-Item -Force -Path "$faissRoot/bin/liblapack.dll" -Destination $dmlDir -ErrorAction SilentlyContinue
