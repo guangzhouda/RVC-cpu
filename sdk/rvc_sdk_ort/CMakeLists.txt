@@ -9,6 +9,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 option(RVC_SDK_ORT_BUILD_DEMO "Build demo app" ON)
 option(RVC_SDK_ORT_BUILD_REALTIME_DEMO "Build realtime demo app (miniaudio)" ON)
 option(RVC_SDK_ORT_BUILD_FILE_DEMO "Build wav-to-wav demo app (miniaudio)" ON)
+option(RVC_SDK_ORT_BUILD_LAUNCHER "Build GUI launcher app (Win32)" ON)
 
 # ---- Dependencies (prebuilt) ----
 # 为了避免强依赖特定包管理器，这里采用“指定 ROOT 路径”的方式查找。
@@ -76,6 +77,7 @@ add_library(rvc_sdk_ort SHARED
   src/rvc_engine.cpp
   src/dsp/linear_resampler.cpp
   src/dsp/sola.cpp
+  src/post/gtcrn_post_denoiser.cpp
   src/f0/yin_f0.cpp
   src/f0/rmvpe_f0.cpp
   third_party/kissfft/kiss_fft.c
@@ -146,4 +148,17 @@ if(RVC_SDK_ORT_BUILD_FILE_DEMO)
       "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio"
   )
   target_link_libraries(rvc_sdk_ort_file PRIVATE rvc_sdk_ort)
+endif()
+
+if(RVC_SDK_ORT_BUILD_LAUNCHER AND WIN32)
+  add_executable(rvc_sdk_ort_launcher WIN32
+    demo_launcher/main.cpp
+  )
+  if(MSVC)
+    target_compile_definitions(rvc_sdk_ort_launcher PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(rvc_sdk_ort_launcher PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(rvc_sdk_ort_launcher PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_link_libraries(rvc_sdk_ort_launcher PRIVATE user32 gdi32 shell32 comdlg32)
 endif()

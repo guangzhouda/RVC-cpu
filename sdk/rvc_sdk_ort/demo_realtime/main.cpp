@@ -41,6 +41,7 @@ struct Args {
   std::string syn;
   std::string index;
   std::string rmvpe;  // 可选：rmvpe.onnx（更稳定的 F0）
+  std::string gtcrn;  // 可选：gtcrn_simple.onnx（前/后置降噪）
 
   bool list_devices = false;
   rvc_sdk_ort_ep_t ep = RVC_SDK_ORT_EP_CPU;
@@ -88,6 +89,14 @@ struct Args {
   // 如果推理偶尔跑慢（rt≈1 附近），输入队列会越积越多，导致“延时越来越大”。
   // 该选项用于把延时上限钳住：当输入队列超过阈值时丢弃最旧的音频，并重置 SDK 状态。
   float max_queue_sec = 0.0f;  // 0=关闭
+
+  // 瞬态抑制
+  int32_t transient_suppress = 0;
+  float transient_gain_db = -20.0f;
+  float transient_crest_threshold = 8.0f;
+  float transient_hold_ms = 80.0f;
+  int32_t pre_denoise = 0;
+  int32_t post_denoise = 0;
 };
 
 static std::filesystem::path GetExeDir() {
@@ -178,6 +187,7 @@ static void ApplyIniConfigIfPresent(Args* a) {
     const std::filesystem::path syn = models / "synthesizer.onnx";
     const std::filesystem::path idx0 = models / "retrieval.index";
     const std::filesystem::path rmvpe = models / "rmvpe.onnx";
+    const std::filesystem::path gtcrn = models / "gtcrn_simple.onnx";
     if (a->enc.empty() && std::filesystem::exists(enc)) a->enc = PathToUtf8(enc);
     if (a->syn.empty() && std::filesystem::exists(syn)) a->syn = PathToUtf8(syn);
     if (a->index.empty()) {
@@ -193,6 +203,7 @@ static void ApplyIniConfigIfPresent(Args* a) {
       }
     }
     if (a->rmvpe.empty() && std::filesystem::exists(rmvpe)) a->rmvpe = PathToUtf8(rmvpe);
+    if (a->gtcrn.empty() && std::filesystem::exists(gtcrn)) a->gtcrn = PathToUtf8(gtcrn);
     return;
   }
 
@@ -217,6 +228,18 @@ static void ApplyIniConfigIfPresent(Args* a) {
       a->rmvpe.clear();
     }
   }
+  if (IniGetString(ini_u8.c_str(), "models", "gtcrn", &s) && !s.empty()) {
+    const std::string p = ResolveMaybeRelative(ini_dir, s);
+#  ifdef _WIN32
+    if (std::filesystem::exists(std::filesystem::u8path(p))) {
+#  else
+    if (std::filesystem::exists(std::filesystem::path(p))) {
+#  endif
+      a->gtcrn = p;
+    } else {
+      a->gtcrn.clear();
+    }
+  }
 
   // 设备/采样率
   (void)IniGetInt(ini_u8.c_str(), "audio", "cap_id", &a->cap_id);
@@ -230,7 +253,9 @@ static void ApplyIniConfigIfPresent(Args* a) {
   (void)IniGetFloat(ini_u8.c_str(), "rvc", "crossfade_sec", &a->crossfade_sec);
   (void)IniGetInt(ini_u8.c_str(), "rvc", "prefill_blocks", &a->prefill_blocks);
   (void)IniGetFloat(ini_u8.c_str(), "rvc", "index_rate", &a->index_rate);
+  (void)IniGetInt(ini_u8.c_str(), "rvc", "sid", &a->sid);
   (void)IniGetInt(ini_u8.c_str(), "rvc", "up_key", &a->up_key);
+  (void)IniGetInt(ini_u8.c_str(), "rvc", "vec_dim", &a->vec_dim);
   (void)IniGetInt(ini_u8.c_str(), "rvc", "threads", &a->threads);
   (void)IniGetFloat(ini_u8.c_str(), "rvc", "noise_scale", &a->noise_scale);
   (void)IniGetFloat(ini_u8.c_str(), "rvc", "rms_mix_rate", &a->rms_mix_rate);
@@ -241,6 +266,12 @@ static void ApplyIniConfigIfPresent(Args* a) {
   (void)IniGetFloat(ini_u8.c_str(), "rvc", "vad_attack_ms", &a->vad_attack_ms);
   (void)IniGetFloat(ini_u8.c_str(), "rvc", "vad_release_ms", &a->vad_release_ms);
   (void)IniGetFloat(ini_u8.c_str(), "rvc", "max_queue_sec", &a->max_queue_sec);
+  (void)IniGetInt(ini_u8.c_str(), "rvc", "transient_suppress", &a->transient_suppress);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "transient_gain_db", &a->transient_gain_db);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "transient_crest_threshold", &a->transient_crest_threshold);
+  (void)IniGetFloat(ini_u8.c_str(), "rvc", "transient_hold_ms", &a->transient_hold_ms);
+  (void)IniGetInt(ini_u8.c_str(), "rvc", "pre_denoise", &a->pre_denoise);
+  (void)IniGetInt(ini_u8.c_str(), "rvc", "post_denoise", &a->post_denoise);
 
   // EP（可选）：cpu/cuda/dml
   if (IniGetString(ini_u8.c_str(), "rvc", "ep", &s) && !s.empty()) {
@@ -287,6 +318,9 @@ static void Usage() {
   std::printf("  --rms-mix-rate <f>       RMS envelope mix rate (0~1, default 1 = off)\n");
   std::printf("  --rmvpe <path>           Use RMVPE F0 (load rmvpe.onnx)\n");
   std::printf("  --rmvpe-threshold <f>    RMVPE decode threshold (default 0.03)\n");
+  std::printf("  --gtcrn <path>           Use GTCRN denoise ONNX\n");
+  std::printf("  --pre-denoise <0|1>      Enable GTCRN denoise before RVC inference (default 0)\n");
+  std::printf("  --post-denoise <0|1>     Enable GTCRN denoise after RVC synthesis (default 0)\n");
   std::printf("  --max-queue-sec <f>      Drop old capture audio if input queue exceeds f seconds (default 0 = off)\n");
 }
 
@@ -332,6 +366,8 @@ static bool ParseArgs(int argc, char** argv, Args* a) {
       a->index = argv[++i];
     } else if (std::strcmp(arg, "--rmvpe") == 0 && i + 1 < argc) {
       a->rmvpe = argv[++i];
+    } else if (std::strcmp(arg, "--gtcrn") == 0 && i + 1 < argc) {
+      a->gtcrn = argv[++i];
     } else if (std::strcmp(arg, "--sid") == 0 && i + 1 < argc) {
       if (!ParseInt(argv[++i], &a->sid)) return false;
     } else if (std::strcmp(arg, "--index-rate") == 0 && i + 1 < argc) {
@@ -384,6 +420,10 @@ static bool ParseArgs(int argc, char** argv, Args* a) {
       if (!ParseFloat(argv[++i], &a->rmvpe_threshold)) return false;
     } else if (std::strcmp(arg, "--max-queue-sec") == 0 && i + 1 < argc) {
       if (!ParseFloat(argv[++i], &a->max_queue_sec)) return false;
+    } else if (std::strcmp(arg, "--pre-denoise") == 0 && i + 1 < argc) {
+      if (!ParseInt(argv[++i], &a->pre_denoise)) return false;
+    } else if (std::strcmp(arg, "--post-denoise") == 0 && i + 1 < argc) {
+      if (!ParseInt(argv[++i], &a->post_denoise)) return false;
     } else {
       std::printf("Unknown arg: %s\n", arg);
       return false;
@@ -872,6 +912,10 @@ int main(int argc, char** argv) {
     cfg.rms_mix_rate = a.rms_mix_rate;
     cfg.f0_method = a.rmvpe.empty() ? RVC_SDK_ORT_F0_YIN : RVC_SDK_ORT_F0_RMVPE;
     cfg.rmvpe_threshold = a.rmvpe_threshold;
+    cfg.transient_suppress = a.transient_suppress;
+    cfg.transient_gain_db = a.transient_gain_db;
+    cfg.transient_crest_threshold = a.transient_crest_threshold;
+    cfg.transient_hold_ms = a.transient_hold_ms;
 
     h = rvc_sdk_ort_create(&cfg, &err);
     if (!h) {
@@ -892,6 +936,33 @@ int main(int argc, char** argv) {
         rvc_sdk_ort_destroy(h);
         ma_context_uninit(&ctx);
         return 1;
+      }
+    }
+
+    if (a.pre_denoise != 0 || a.post_denoise != 0) {
+      if (a.gtcrn.empty()) {
+        std::printf("gtcrn denoise is enabled but gtcrn model path is empty.\n");
+        rvc_sdk_ort_destroy(h);
+        ma_context_uninit(&ctx);
+        return 1;
+      }
+      if (a.pre_denoise != 0) {
+        if (rvc_sdk_ort_load_pre_denoise(h, a.gtcrn.c_str(), &err) != 0) {
+          std::printf("load gtcrn pre denoise failed: (%d) %s\n", (int)err.code, err.message);
+          rvc_sdk_ort_destroy(h);
+          ma_context_uninit(&ctx);
+          return 1;
+        }
+        std::printf("GTCRN pre denoise enabled\n");
+      }
+      if (a.post_denoise != 0) {
+        if (rvc_sdk_ort_load_post_denoise(h, a.gtcrn.c_str(), &err) != 0) {
+          std::printf("load gtcrn post denoise failed: (%d) %s\n", (int)err.code, err.message);
+          rvc_sdk_ort_destroy(h);
+          ma_context_uninit(&ctx);
+          return 1;
+        }
+        std::printf("GTCRN post denoise enabled\n");
       }
     }
 

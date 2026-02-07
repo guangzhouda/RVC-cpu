@@ -61,6 +61,12 @@ class RvcEngine {
   // 可选：加载 RMVPE（用于更稳定的实时 F0）。
   bool LoadRmvpe(const std::string& rmvpe_onnx, Error* err);
 
+  // Optional: load GTCRN pre-denoise ONNX.
+  bool LoadPreDenoise(const std::string& gtcrn_onnx, Error* err);
+
+  // Optional: load GTCRN post-denoise ONNX.
+  bool LoadPostDenoise(const std::string& gtcrn_onnx, Error* err);
+
   bool ProcessBlock(const float* in_mono,
                     int32_t in_frames,
                     float* out_mono,
@@ -85,6 +91,8 @@ class RvcEngine {
 
   void UpdateInputBuffers_(const float* in_mono, int32_t in_frames);
 
+  bool DetectTransient_(const float* in_mono, int32_t n);
+
  private:
   rvc_sdk_ort_config_t cfg_;
   FramePlan plan_;
@@ -105,6 +113,11 @@ class RvcEngine {
   // 随机噪声（给 synthesizer onnx 的 rnd）
   std::mt19937 rng_;
   std::normal_distribution<float> norm01_;
+
+  // 瞬态检测状态
+  float prev_subframe_rms_ = 0.0f;
+  int32_t transient_hold_left_ = 0;
+  float last_out_tail_ = 0.0f;  // 上一 block 最后一个采样，用于 crossfade
 
   // 不在头文件里直接暴露 ORT/FAISS 类型，避免污染 include。
   struct Impl;

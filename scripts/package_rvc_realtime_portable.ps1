@@ -19,8 +19,11 @@
 #>
 
 param(
-  [ValidateSet("cuda", "dml")]
+  [ValidateSet("cpu", "cuda", "dml")]
   [string]$Runtime = "cuda",
+
+  # Template/profile name (used for models/<Profile>/ and profiles/<Profile>.ini)
+  [string]$Profile = "default",
 
   [Parameter(Mandatory = $true)]
   [string]$Enc,
@@ -29,6 +32,7 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$Index,
   [string]$Rmvpe = "",
+  [string]$Gtcrn = "",
 
   [int]$CapId = -1,
   [int]$PbId = -1,
@@ -49,6 +53,8 @@ param(
   [float]$VadRms = 0.02,
   [float]$VadFloor = 1.0,
   [float]$MaxQueueSec = 0.3,
+  [int]$PreDenoise = 1,
+  [int]$PostDenoise = 1,
 
   [string]$OutRoot = "dist_realtime_portable"
 )
@@ -65,8 +71,9 @@ Ensure-File $Enc
 Ensure-File $Syn
 Ensure-File $Index
 if ($Rmvpe -ne "") { Ensure-File $Rmvpe }
+if ($Gtcrn -ne "") { Ensure-File $Gtcrn }
 
-$buildDir = if ($Runtime -eq "cuda") { "build_rvc_sdk_ort/Release" } else { "build_rvc_sdk_ort/Release_dml" }
+$buildDir = if ($Runtime -eq "cpu") { "build_rvc_sdk_ort/Release_cpu" } elseif ($Runtime -eq "cuda") { "build_rvc_sdk_ort/Release" } else { "build_rvc_sdk_ort/Release_dml" }
 if (!(Test-Path $buildDir)) {
   throw "Build output not found: $buildDir (run scripts/build_rvc_sdk_ort.ps1 first)."
 }
@@ -77,6 +84,7 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 # Copy binaries + runtime DLLs (reuse existing packaging logic conceptually, but keep output minimal).
 Copy-Item -Force -Path "$buildDir/rvc_sdk_ort_realtime.exe" -Destination "$outDir/"
 Copy-Item -Force -Path "$buildDir/rvc_sdk_ort.dll" -Destination "$outDir/"
+Copy-Item -Force -Path "$buildDir/rvc_sdk_ort_launcher.exe" -Destination "$outDir/" -ErrorAction SilentlyContinue
 
 Copy-Item -Force -Path "$buildDir/onnxruntime.dll" -Destination "$outDir/" -ErrorAction SilentlyContinue
 Copy-Item -Force -Path "$buildDir/DirectML.dll" -Destination "$outDir/" -ErrorAction SilentlyContinue
@@ -90,11 +98,23 @@ Copy-Item -Force -Path "$buildDir/liblapack.dll" -Destination "$outDir/" -ErrorA
 # Models
 $modelsDir = Join-Path $outDir "models"
 New-Item -ItemType Directory -Force -Path $modelsDir | Out-Null
-Copy-Item -Force -Path $Enc -Destination (Join-Path $modelsDir "content_encoder.onnx")
-Copy-Item -Force -Path $Syn -Destination (Join-Path $modelsDir "synthesizer.onnx")
-Copy-Item -Force -Path $Index -Destination (Join-Path $modelsDir "retrieval.index")
+
+# New layout (multi-profile friendly):
+# - models/_shared/content_encoder.onnx (+ optional rmvpe.onnx)
+# - models/<Profile>/synthesizer.onnx + retrieval.index
+$sharedDir = Join-Path $modelsDir "_shared"
+$profileDir = Join-Path $modelsDir $Profile
+New-Item -ItemType Directory -Force -Path $sharedDir | Out-Null
+New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+
+Copy-Item -Force -Path $Enc -Destination (Join-Path $sharedDir "content_encoder.onnx")
+Copy-Item -Force -Path $Syn -Destination (Join-Path $profileDir "synthesizer.onnx")
+Copy-Item -Force -Path $Index -Destination (Join-Path $profileDir "retrieval.index")
 if ($Rmvpe -ne "") {
-  Copy-Item -Force -Path $Rmvpe -Destination (Join-Path $modelsDir "rmvpe.onnx")
+  Copy-Item -Force -Path $Rmvpe -Destination (Join-Path $sharedDir "rmvpe.onnx")
+}
+if ($Gtcrn -ne "") {
+  Copy-Item -Force -Path $Gtcrn -Destination (Join-Path $sharedDir "gtcrn_simple.onnx")
 }
 
 # INI config (exe will auto load this when args are omitted)
@@ -104,10 +124,11 @@ $ini = @"
 ; Date: $(Get-Date -Format "yyyy-MM-dd")
 
 [models]
-enc=models\\content_encoder.onnx
-syn=models\\synthesizer.onnx
-index=models\\retrieval.index
-rmvpe=models\\rmvpe.onnx
+enc=models\\_shared\\content_encoder.onnx
+syn=models\\$Profile\\synthesizer.onnx
+index=models\\$Profile\\retrieval.index
+rmvpe=models\\_shared\\rmvpe.onnx
+gtcrn=models\\_shared\\gtcrn_simple.onnx
 
 [audio]
 cap_id=$CapId
@@ -115,13 +136,16 @@ pb_id=$PbId
 io_sr=$IoSr
 
 [rvc]
+ep=$Runtime
 model_sr=$ModelSr
 block_sec=$BlockSec
 extra_sec=$ExtraSec
 crossfade_sec=$CrossfadeSec
 prefill_blocks=$PrefillBlocks
 index_rate=$IndexRate
+sid=0
 up_key=$UpKey
+vec_dim=768
 threads=$Threads
 noise_scale=$NoiseScale
 rms_mix_rate=$RmsMixRate
@@ -129,9 +153,16 @@ rmvpe_threshold=$RmvpeThreshold
 vad_rms=$VadRms
 vad_floor=$VadFloor
 max_queue_sec=$MaxQueueSec
+pre_denoise=$PreDenoise
+post_denoise=$PostDenoise
 "@
 
 Set-Content -Path (Join-Path $outDir "rvc_realtime.ini") -Value $ini -Encoding ASCII
 
+# Templates (for rvc_sdk_ort_launcher.exe): put a default profile under profiles/
+$profilesDir = Join-Path $outDir "profiles"
+New-Item -ItemType Directory -Force -Path $profilesDir | Out-Null
+Copy-Item -Force -Path (Join-Path $outDir "rvc_realtime.ini") -Destination (Join-Path $profilesDir ($Profile + ".ini")) -ErrorAction SilentlyContinue
+
 Write-Host "Packaged portable realtime -> $outDir"
-Write-Host "Double click: rvc_sdk_ort_realtime.exe (it will auto load rvc_realtime.ini)"
+Write-Host "Double click: rvc_sdk_ort_launcher.exe (GUI)  or  rvc_sdk_ort_realtime.exe (it will auto load rvc_realtime.ini)"

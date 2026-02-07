@@ -111,6 +111,54 @@ RVC_SDK_ORT_API int32_t rvc_sdk_ort_load_rmvpe(
   return 0;
 }
 
+RVC_SDK_ORT_API int32_t rvc_sdk_ort_load_pre_denoise(
+    rvc_sdk_ort_handle_t h,
+    const char* gtcrn_onnx,
+    rvc_sdk_ort_error_t* err) {
+  ClearErr(err);
+  auto* engine = reinterpret_cast<rvc_ort::RvcEngine*>(h);
+  if (!engine) {
+    SetErr(err, -43, "handle is null");
+    return -43;
+  }
+  if (!gtcrn_onnx) {
+    SetErr(err, -44, "gtcrn_onnx path is null");
+    return -44;
+  }
+
+  rvc_ort::Error e;
+  const bool ok = engine->LoadPreDenoise(gtcrn_onnx, &e);
+  if (!ok) {
+    SetErrFrom(err, e);
+    return e.code != 0 ? e.code : -45;
+  }
+  return 0;
+}
+
+RVC_SDK_ORT_API int32_t rvc_sdk_ort_load_post_denoise(
+    rvc_sdk_ort_handle_t h,
+    const char* gtcrn_onnx,
+    rvc_sdk_ort_error_t* err) {
+  ClearErr(err);
+  auto* engine = reinterpret_cast<rvc_ort::RvcEngine*>(h);
+  if (!engine) {
+    SetErr(err, -40, "handle is null");
+    return -40;
+  }
+  if (!gtcrn_onnx) {
+    SetErr(err, -41, "gtcrn_onnx path is null");
+    return -41;
+  }
+
+  rvc_ort::Error e;
+  const bool ok = engine->LoadPostDenoise(gtcrn_onnx, &e);
+  if (!ok) {
+    SetErrFrom(err, e);
+    return e.code != 0 ? e.code : -42;
+  }
+  return 0;
+}
+
 RVC_SDK_ORT_API int32_t rvc_sdk_ort_get_block_size(rvc_sdk_ort_handle_t h) {
   auto* engine = reinterpret_cast<rvc_ort::RvcEngine*>(h);
   if (!engine) return 0;

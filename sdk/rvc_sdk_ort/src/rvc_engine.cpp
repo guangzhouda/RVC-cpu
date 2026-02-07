@@ -14,6 +14,7 @@
 #include "dsp/sola.h"
 #include "f0/rmvpe_f0.h"
 #include "f0/yin_f0.h"
+#include "post/gtcrn_post_denoiser.h"
 
 // ORT
 #include <onnxruntime_cxx_api.h>
@@ -132,6 +133,10 @@ struct RvcEngine::Impl {
 
   // RMVPE（可选）
   std::unique_ptr<RmvpeF0> rmvpe;
+
+  // Optional GTCRN denoise
+  std::unique_ptr<GtcrnPostDenoiser> pre_denoise;
+  std::unique_ptr<GtcrnPostDenoiser> post_denoise;
 };
 
 RvcEngine::RvcEngine(const rvc_sdk_ort_config_t& cfg)
@@ -168,6 +173,12 @@ void RvcEngine::ResetState() {
   std::fill(cache_pitchf_.begin(), cache_pitchf_.end(), 0.0f);
   if (impl_ && impl_->sola) {
     impl_->sola->Reset();
+  }
+  if (impl_ && impl_->pre_denoise) {
+    impl_->pre_denoise->Reset();
+  }
+  if (impl_ && impl_->post_denoise) {
+    impl_->post_denoise->Reset();
   }
   // rng 复位：保证复位后输出更可预期（不会因为历史随机序列导致突发噪声）
   rng_.seed(114514u);
@@ -467,6 +478,48 @@ bool RvcEngine::LoadRmvpe(const std::string& rmvpe_onnx, Error* err) {
     return false;
   }
 
+  return true;
+}
+
+bool RvcEngine::LoadPreDenoise(const std::string& gtcrn_onnx, Error* err) {
+  if (gtcrn_onnx.empty()) {
+    SetError(err, 95, "gtcrn onnx path is empty.");
+    return false;
+  }
+  if (!impl_ || !impl_->sess_encoder || !impl_->sess_synth) {
+    SetError(err, 96, "load pre denoise requires encoder/synth sessions (call rvc_sdk_ort_load first).");
+    return false;
+  }
+
+  auto den = std::make_unique<GtcrnPostDenoiser>();
+  std::string msg;
+  if (!den->Init(&impl_->env, impl_->so, gtcrn_onnx, &msg)) {
+    SetError(err, 97, std::string("Failed to load GTCRN pre denoise: ") + msg);
+    return false;
+  }
+
+  impl_->pre_denoise = std::move(den);
+  return true;
+}
+
+bool RvcEngine::LoadPostDenoise(const std::string& gtcrn_onnx, Error* err) {
+  if (gtcrn_onnx.empty()) {
+    SetError(err, 100, "gtcrn onnx path is empty.");
+    return false;
+  }
+  if (!impl_ || !impl_->sess_encoder || !impl_->sess_synth) {
+    SetError(err, 101, "load post denoise requires encoder/synth sessions (call rvc_sdk_ort_load first).");
+    return false;
+  }
+
+  auto den = std::make_unique<GtcrnPostDenoiser>();
+  std::string msg;
+  if (!den->Init(&impl_->env, impl_->so, gtcrn_onnx, &msg)) {
+    SetError(err, 102, std::string("Failed to load GTCRN post denoise: ") + msg);
+    return false;
+  }
+
+  impl_->post_denoise = std::move(den);
   return true;
 }
 
@@ -1120,6 +1173,31 @@ bool RvcEngine::InferWindow_(std::vector<float>* infer_wav_io, Error* err) {
   return true;
 }
 
+bool RvcEngine::DetectTransient_(const float* in_mono, int32_t n) {
+  if (n <= 0) return false;
+  const float crest_thr = (cfg_.transient_crest_threshold > 0.0f) ? cfg_.transient_crest_threshold : 12.0f;
+
+  // 先算整个 block 的 RMS：如果有人在说话（RMS 较高），不触发瞬态检测。
+  // 原因：说话时即使混入键盘声，RVC 输出也会盖住；误触发反而导致断音。
+  double block_s2 = 0.0;
+  float block_peak = 0.0f;
+  for (int32_t i = 0; i < n; ++i) {
+    const float v = std::fabs(in_mono[i]);
+    block_s2 += static_cast<double>(v) * static_cast<double>(v);
+    if (v > block_peak) block_peak = v;
+  }
+  const float block_rms = static_cast<float>(std::sqrt(block_s2 / static_cast<double>(n)));
+
+  // block RMS 高于语音门限 → 有人声，跳过检测
+  if (block_rms > 0.02f) return false;
+
+  // block 整体 crest factor
+  const float block_crest = (block_rms > 1e-6f) ? (block_peak / block_rms) : 0.0f;
+
+  // 触发条件：block 整体安静但有尖锐脉冲（高 crest + 有一定 peak）
+  return (block_peak > 0.01f && block_crest > crest_thr);
+}
+
 bool RvcEngine::ProcessBlock(const float* in_mono,
                             int32_t in_frames,
                             float* out_mono,
@@ -1134,7 +1212,36 @@ bool RvcEngine::ProcessBlock(const float* in_mono,
     return false;
   }
 
-  UpdateInputBuffers_(in_mono, in_frames);
+  const float* model_in = in_mono;
+  std::vector<float> denoise_in;
+  if (impl_ && impl_->pre_denoise) {
+    denoise_in.assign(static_cast<size_t>(in_frames), 0.0f);
+    std::string den_err;
+    if (!impl_->pre_denoise->ProcessBlock(in_mono, in_frames, plan_.io_sr, denoise_in.data(), &den_err)) {
+      SetError(err, 98, std::string("GTCRN pre denoise failed: ") + den_err);
+      return false;
+    }
+    model_in = denoise_in.data();
+  }
+
+  UpdateInputBuffers_(model_in, in_frames);
+
+  // 瞬态检测：旁路 RVC，输出静音
+  if (cfg_.transient_suppress != 0) {
+    const bool is_transient = DetectTransient_(model_in, in_frames);
+    if (is_transient) {
+      // 输出静音，从上一 block 尾部做 10ms 淡出避免咔哒
+      const int32_t fade_len = std::min<int32_t>(in_frames, plan_.zc_io);
+      for (int32_t i = 0; i < fade_len; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(std::max<int32_t>(fade_len - 1, 1));
+        out_mono[i] = last_out_tail_ * (1.0f - t);
+      }
+      std::memset(out_mono + fade_len, 0, sizeof(float) * (in_frames - fade_len));
+      last_out_tail_ = 0.0f;
+      std::fill(sola_buffer_.begin(), sola_buffer_.end(), 0.0f);
+      return true;
+    }
+  }
 
   std::vector<float> infer_wav;
   if (!InferWindow_(&infer_wav, err)) {
@@ -1198,12 +1305,25 @@ bool RvcEngine::ProcessBlock(const float* in_mono,
                                           out_mono);
   (void)off;  // 调试时可记录
 
+  if (impl_ && impl_->post_denoise) {
+    std::vector<float> denoise_out(static_cast<size_t>(block), 0.0f);
+    std::string den_err;
+    if (!impl_->post_denoise->ProcessBlock(out_mono, block, plan_.io_sr, denoise_out.data(), &den_err)) {
+      SetError(err, 99, std::string("GTCRN post denoise failed: ") + den_err);
+      return false;
+    }
+    std::memcpy(out_mono, denoise_out.data(), sizeof(float) * static_cast<size_t>(block));
+  }
+
   // 限幅（避免超出 [-1,1]），并清理 NaN/Inf（某些 EP/模型异常时可能出现，避免直通到音频设备导致“无声/爆音”）
   for (int32_t i = 0; i < block; ++i) {
     if (!std::isfinite(out_mono[i])) out_mono[i] = 0.0f;
     if (out_mono[i] > 1.0f) out_mono[i] = 1.0f;
     if (out_mono[i] < -1.0f) out_mono[i] = -1.0f;
   }
+
+  // 记录尾部采样（用于瞬态旁路时的 crossfade）
+  if (block > 0) last_out_tail_ = out_mono[block - 1];
 
   return true;
 }

@@ -93,6 +93,12 @@ typedef struct rvc_sdk_ort_config_t {
 
   // RMVPE decode 阈值（对齐 python：0.03）
   float rmvpe_threshold;
+
+  // 瞬态抑制：检测到键盘/敲击等脉冲噪声时旁路 RVC，输出衰减后的原始输入。
+  int32_t transient_suppress;        // 0=关闭, 1=启用
+  float transient_gain_db;           // 瞬态时输出增益 (dB)，例如 -20（强衰减）或 -6（弱衰减）
+  float transient_crest_threshold;   // crest factor (peak/rms) 阈值，建议 6~12
+  float transient_hold_ms;           // 触发后保持时间 (ms)，建议 50~100
 } rvc_sdk_ort_config_t;
 
 // 运行时信息（用于调试/性能分析；不影响主流程）
@@ -125,6 +131,20 @@ RVC_SDK_ORT_API int32_t rvc_sdk_ort_load(
 RVC_SDK_ORT_API int32_t rvc_sdk_ort_load_rmvpe(
   rvc_sdk_ort_handle_t h,
   const char* rmvpe_onnx,              // rmvpe.onnx（输入 log-mel，输出 salience）
+  rvc_sdk_ort_error_t* err
+);
+
+// Optional: load GTCRN pre-denoise ONNX (streaming, runs before RVC inference).
+RVC_SDK_ORT_API int32_t rvc_sdk_ort_load_pre_denoise(
+  rvc_sdk_ort_handle_t h,
+  const char* gtcrn_onnx,
+  rvc_sdk_ort_error_t* err
+);
+
+// Optional: load GTCRN post-denoise ONNX (streaming, runs after RVC synthesis).
+RVC_SDK_ORT_API int32_t rvc_sdk_ort_load_post_denoise(
+  rvc_sdk_ort_handle_t h,
+  const char* gtcrn_onnx,
   rvc_sdk_ort_error_t* err
 );
 
