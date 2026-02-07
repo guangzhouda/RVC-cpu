@@ -30,7 +30,9 @@ class _InferStreamWrapper(torch.nn.Module):
         super().__init__()
         self.net_g = net_g
 
-    def forward(self, phone, phone_lengths, pitch, pitchf, sid, rnd, skip_head, return_length):
+    def forward(
+        self, phone, phone_lengths, pitch, pitchf, sid, rnd, skip_head, return_length
+    ):
         # 注意：这里的 skip_head/return_length 是“10ms 帧数”（和 tools/rvc_for_realtime.py 一致）
         # torch.onnx.export 采用 tracing，.item() 会把示例输入的值固化到图里；
         # 因此导出的 onnx 适配固定的 block/extra 配置（运行时也应传入同样的值）。
@@ -96,12 +98,30 @@ def export_onnx_stream(
     test_ret = torch.LongTensor([int(return_length_frames)])
 
     wrapper = _InferStreamWrapper(net_g)
-    input_names = ["phone", "phone_lengths", "pitch", "pitchf", "sid", "rnd", "skip_head", "return_length"]
+    input_names = [
+        "phone",
+        "phone_lengths",
+        "pitch",
+        "pitchf",
+        "sid",
+        "rnd",
+        "skip_head",
+        "return_length",
+    ]
     output_names = ["audio"]
 
     torch.onnx.export(
         wrapper,
-        (test_phone, test_phone_lengths, test_pitch, test_pitchf, test_sid, test_rnd, test_skip, test_ret),
+        (
+            test_phone,
+            test_phone_lengths,
+            test_pitch,
+            test_pitchf,
+            test_sid,
+            test_rnd,
+            test_skip,
+            test_ret,
+        ),
         ExportedPath,
         dynamic_axes={
             "phone": [1],

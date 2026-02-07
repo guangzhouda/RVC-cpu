@@ -21,7 +21,9 @@ def _parse_providers(raw: str) -> List[str]:
     return ps
 
 
-def _make_session(model_path: str, providers: List[str], threads: int, opt: str) -> ort.InferenceSession:
+def _make_session(
+    model_path: str, providers: List[str], threads: int, opt: str
+) -> ort.InferenceSession:
     so = ort.SessionOptions()
     if threads and threads > 0:
         so.intra_op_num_threads = int(threads)
@@ -63,14 +65,25 @@ def _bench(sess: ort.InferenceSession, T: int, iters: int, warmup: int) -> float
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fp32", required=True, help="fp32 encoder.onnx path")
-    ap.add_argument("--fp16", required=True, help="fp16 encoder.onnx path (or any alternative encoder)")
+    ap.add_argument(
+        "--fp16",
+        required=True,
+        help="fp16 encoder.onnx path (or any alternative encoder)",
+    )
     ap.add_argument(
         "--providers",
         default="CPUExecutionProvider",
         help="Comma-separated providers. Example: 'DmlExecutionProvider,CPUExecutionProvider' or 'CUDAExecutionProvider,CPUExecutionProvider'",
     )
-    ap.add_argument("--threads", type=int, default=0, help="ORT intra-op threads (0=default)")
-    ap.add_argument("--opt", default="all", choices=["disable", "basic", "extended", "all"], help="ORT graph optimization level")
+    ap.add_argument(
+        "--threads", type=int, default=0, help="ORT intra-op threads (0=default)"
+    )
+    ap.add_argument(
+        "--opt",
+        default="all",
+        choices=["disable", "basic", "extended", "all"],
+        help="ORT graph optimization level",
+    )
     ap.add_argument("--iters", type=int, default=200, help="Benchmark iterations")
     ap.add_argument("--warmup", type=int, default=20, help="Warmup iterations")
     ap.add_argument(
@@ -102,4 +115,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

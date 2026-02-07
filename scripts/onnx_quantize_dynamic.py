@@ -68,14 +68,22 @@ def quant_one(
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True, help="Input ONNX path")
-    ap.add_argument("--output", default="", help="Output ONNX path (default: <input>.int8.onnx)")
+    ap.add_argument(
+        "--output", default="", help="Output ONNX path (default: <input>.int8.onnx)"
+    )
     ap.add_argument(
         "--ops",
         default="MatMul,Gemm",
         help="Comma-separated op types to quantize (default: MatMul,Gemm). Use empty to let ORT decide.",
     )
-    ap.add_argument("--per-channel", action="store_true", help="Enable per-channel quantization")
-    ap.add_argument("--reduce-range", action="store_true", help="Enable reduce-range (may help older CPUs)")
+    ap.add_argument(
+        "--per-channel", action="store_true", help="Enable per-channel quantization"
+    )
+    ap.add_argument(
+        "--reduce-range",
+        action="store_true",
+        help="Enable reduce-range (may help older CPUs)",
+    )
     ap.add_argument(
         "--external-data",
         action="store_true",
@@ -89,13 +97,19 @@ def main() -> int:
 
     out = Path(args.output).resolve() if args.output else _guess_out_path(inp, ".int8")
 
-    ops = [s.strip() for s in args.ops.split(",") if s.strip()] if args.ops is not None else None
+    ops = (
+        [s.strip() for s in args.ops.split(",") if s.strip()]
+        if args.ops is not None
+        else None
+    )
     if ops == []:
         ops = None
 
     print(f"[Input ] {inp} ({_size_mb(inp):.2f} MiB), opset={_load_opset(inp)}")
     print(f"[Output] {out}")
-    print(f"[Config] weight_type=QInt8 per_channel={bool(args.per_channel)} reduce_range={bool(args.reduce_range)} ops={ops}")
+    print(
+        f"[Config] weight_type=QInt8 per_channel={bool(args.per_channel)} reduce_range={bool(args.reduce_range)} ops={ops}"
+    )
 
     quant_one(
         inp=inp,
@@ -112,4 +126,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

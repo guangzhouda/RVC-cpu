@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Iterable, List, Tuple
 
 # ---- 在导入 huggingface_hub 之前设置环境变量，强制显示进度条 ----
-os.environ.setdefault("HF_HUB_ENABLE_PROGRESS_BARS", "1")   # 显示 tqdm 进度条
+os.environ.setdefault("HF_HUB_ENABLE_PROGRESS_BARS", "1")  # 显示 tqdm 进度条
 # 如已安装 hf_transfer（pip install -U hf_transfer），打开下行可显著提速大文件
 os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
 
@@ -20,8 +20,11 @@ except Exception:
     try:
         from huggingface_hub.utils import HfHubHTTPError, LocalEntryNotFoundError
     except Exception:
+
         class HfHubHTTPError(Exception): ...
+
         class LocalEntryNotFoundError(Exception): ...
+
 
 REPO = "lj1995/VoiceConversionWebUI"
 REV = "main"
@@ -37,18 +40,30 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DOWNLOADS: List[Tuple[str, Path]] = [
     ("hubert_base.pt", BASE_DIR / "assets/hubert"),
     ("rmvpe.pt", BASE_DIR / "assets/rmvpe"),
-    ("uvr5_weights/onnx_dereverb_By_FoxJoy/vocals.onnx",
-     BASE_DIR / "assets/uvr5_weights/onnx_dereverb_By_FoxJoy"),
+    (
+        "uvr5_weights/onnx_dereverb_By_FoxJoy/vocals.onnx",
+        BASE_DIR / "assets/uvr5_weights/onnx_dereverb_By_FoxJoy",
+    ),
 ]
 
 _pretrained = [
-    "D32k.pth","D40k.pth","D48k.pth",
-    "G32k.pth","G40k.pth","G48k.pth",
-    "f0D32k.pth","f0D40k.pth","f0D48k.pth",
-    "f0G32k.pth","f0G40k.pth","f0G48k.pth",
+    "D32k.pth",
+    "D40k.pth",
+    "D48k.pth",
+    "G32k.pth",
+    "G40k.pth",
+    "G48k.pth",
+    "f0D32k.pth",
+    "f0D40k.pth",
+    "f0D48k.pth",
+    "f0G32k.pth",
+    "f0G40k.pth",
+    "f0G48k.pth",
 ]
 DOWNLOADS += [(f"pretrained/{m}", BASE_DIR / "assets/pretrained") for m in _pretrained]
-DOWNLOADS += [(f"pretrained_v2/{m}", BASE_DIR / "assets/pretrained_v2") for m in _pretrained]
+DOWNLOADS += [
+    (f"pretrained_v2/{m}", BASE_DIR / "assets/pretrained_v2") for m in _pretrained
+]
 
 _uvr5 = [
     "HP2-%E4%BA%BA%E5%A3%B0vocals%2B%E9%9D%9E%E4%BA%BA%E5%A3%B0instrumentals.pth",
@@ -62,7 +77,10 @@ _uvr5 = [
 ]
 DOWNLOADS += [(f"uvr5_weights/{m}", BASE_DIR / "assets/uvr5_weights") for m in _uvr5]
 
-def try_download(filename: str, local_dir: Path, endpoints: Iterable[str], revision: str = "main") -> str:
+
+def try_download(
+    filename: str, local_dir: Path, endpoints: Iterable[str], revision: str = "main"
+) -> str:
     """
     逐个 endpoint 尝试下载；成功返回本地路径。
     新版 huggingface_hub 会自动断点续传与缓存，无需 resume_download/local_dir_use_symlinks。
@@ -76,7 +94,7 @@ def try_download(filename: str, local_dir: Path, endpoints: Iterable[str], revis
 
         # 指数退避，降低限流/瞬断影响
         if i > 0:
-            time.sleep(1.2 ** i)
+            time.sleep(1.2**i)
 
         try:
             # 只指定 local_dir，由库处理进度条、断点续传与缓存
@@ -94,6 +112,7 @@ def try_download(filename: str, local_dir: Path, endpoints: Iterable[str], revis
 
     raise RuntimeError(f"All endpoints failed for {filename}: {last_err}")
 
+
 def main():
     print("Starting downloads (stable mode, serialized)...", flush=True)
     print(f"Repo: {REPO} @ {REV}", flush=True)
@@ -105,7 +124,9 @@ def main():
         try:
             local_path = try_download(rel, out_dir, ENDPOINTS, REV)
             size_mb = Path(local_path).stat().st_size / (1024 * 1024)
-            print(f"[OK] {Path(rel).name} -> {local_path}  ({size_mb:.2f} MB)", flush=True)
+            print(
+                f"[OK] {Path(rel).name} -> {local_path}  ({size_mb:.2f} MB)", flush=True
+            )
             ok += 1
         except Exception as e:
             print(f"[FAIL] {Path(rel).name}: {e}", flush=True)
@@ -116,6 +137,7 @@ def main():
     print(f"  Failed : {fail}", flush=True)
     if fail == 0:
         print("All models downloaded!", flush=True)
+
 
 if __name__ == "__main__":
     main()
