@@ -1,0 +1,102 @@
+[
+  {
+    "input": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\LibriSpeech\\dev-clean-2\\1272\\135031\\1272-135031-0003.flac",
+    "duration_sec": 4.755,
+    "rvc_gpu": {
+      "engine": "rvc_pytorch",
+      "device": "cuda",
+      "wav": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\LibriSpeech\\dev-clean-2\\1272\\135031\\1272-135031-0003.flac",
+      "out": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\batch_smoke\\00_1272-135031-0003\\rvc_gpu.wav",
+      "sample_rate": 48000,
+      "block_time": 0.25,
+      "crossfade_time": 0.05,
+      "extra_time": 2.5,
+      "f0method": "fcpe",
+      "seed": 1234,
+      "max_blocks": 0,
+      "blocks": 19,
+      "avg_ms": 42.965644504874945,
+      "p95_ms": 44.78497027885169,
+      "rtf": 5.818602348013996,
+      "realtime_ok": true,
+      "sola_offset_mean": 319.5263157894737,
+      "sola_offset_max": 480
+    },
+    "rvc_cpu": {
+      "engine": "rvc_pytorch",
+      "device": "cpu",
+      "wav": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\LibriSpeech\\dev-clean-2\\1272\\135031\\1272-135031-0003.flac",
+      "out": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\batch_smoke\\00_1272-135031-0003\\rvc_cpu.wav",
+      "sample_rate": 48000,
+      "block_time": 0.25,
+      "crossfade_time": 0.05,
+      "extra_time": 2.5,
+      "f0method": "fcpe",
+      "seed": 1234,
+      "max_blocks": 0,
+      "blocks": 19,
+      "avg_ms": 2107.632777808855,
+      "p95_ms": 2129.5827102148905,
+      "rtf": 0.11861648890273283,
+      "realtime_ok": false,
+      "sola_offset_mean": 0.0,
+      "sola_offset_max": 0
+    },
+    "llvc_cpu": {
+      "engine": "llvc_streaming",
+      "device": "cpu",
+      "wav": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\LibriSpeech\\dev-clean-2\\1272\\135031\\1272-135031-0003.flac",
+      "out": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\batch_smoke\\00_1272-135031-0003\\llvc_cpu.wav",
+      "sample_rate": 16000,
+      "chunk_factor": 2,
+      "chunk_len": 416,
+      "chunks": 183,
+      "avg_ms": 55.9758202177905,
+      "p95_ms": 60.91832034289837,
+      "rtf": 0.46448627101557965,
+      "realtime_ok": false
+    },
+    "compare_rvc_cpu_vs_gpu": {
+      "baseline": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\batch_smoke\\00_1272-135031-0003\\rvc_gpu.wav",
+      "candidate": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\batch_smoke\\00_1272-135031-0003\\rvc_cpu.wav",
+      "sample_rate": 16000,
+      "lag_samples": -1054,
+      "lag_ms": -65.875,
+      "aligned_length_samples": 74946,
+      "aligned_length_sec": 4.684125,
+      "metrics": {
+        "wave_mae": 1.0002647638320923,
+        "wave_rmse": 1.0010037422180176,
+        "si_sdr_db": -51.948641446522515,
+        "logmel_l1": 20.97123146057129,
+        "logmel_l2": 25.43014144897461,
+        "mcd": 1396.5834173471098,
+        "f0_rmse_hz": null,
+        "voiced_ratio_reference": 0.0,
+        "voiced_ratio_candidate": 0.9897610921501706,
+        "voiced_overlap_ratio": 0.0
+      }
+    },
+    "compare_llvc_cpu_vs_gpu": {
+      "baseline": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\batch_smoke\\00_1272-135031-0003\\rvc_gpu.wav",
+      "candidate": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\batch_smoke\\00_1272-135031-0003\\llvc_cpu.wav",
+      "sample_rate": 16000,
+      "lag_samples": -10052,
+      "lag_ms": -628.25,
+      "aligned_length_samples": 65948,
+      "aligned_length_sec": 4.12175,
+      "metrics": {
+        "wave_mae": 0.03862689062952995,
+        "wave_rmse": 0.05548425018787384,
+        "si_sdr_db": -29.019553143250544,
+        "logmel_l1": 19.81876564025879,
+        "logmel_l2": 24.652746200561523,
+        "mcd": 1522.2057222790627,
+        "f0_rmse_hz": null,
+        "voiced_ratio_reference": 0.0,
+        "voiced_ratio_candidate": 0.6976744186046512,
+        "voiced_overlap_ratio": 0.0
+      }
+    }
+  }
+]

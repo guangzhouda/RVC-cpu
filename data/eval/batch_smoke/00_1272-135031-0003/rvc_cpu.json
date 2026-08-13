@@ -1,0 +1,20 @@
+{
+  "engine": "rvc_pytorch",
+  "device": "cpu",
+  "wav": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\LibriSpeech\\dev-clean-2\\1272\\135031\\1272-135031-0003.flac",
+  "out": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\batch_smoke\\00_1272-135031-0003\\rvc_cpu.wav",
+  "sample_rate": 48000,
+  "block_time": 0.25,
+  "crossfade_time": 0.05,
+  "extra_time": 2.5,
+  "f0method": "fcpe",
+  "seed": 1234,
+  "max_blocks": 0,
+  "blocks": 19,
+  "avg_ms": 2107.632777808855,
+  "p95_ms": 2129.5827102148905,
+  "rtf": 0.11861648890273283,
+  "realtime_ok": false,
+  "sola_offset_mean": 0.0,
+  "sola_offset_max": 0
+}

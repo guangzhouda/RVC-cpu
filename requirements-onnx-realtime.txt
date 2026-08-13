@@ -1,0 +1,10 @@
+# RVC 实时变声 ONNX 环境（叠加在 .venv 的 RVC 完整依赖之上）
+# 说明: .venv-onnx-stream 通过 site-packages/rvc_base_venv.pth 共享 .venv 的 torch/fairseq/faiss 等大依赖，
+#       本文件只列 ONNX 实时链路特有的包。
+# 纯 CPU 机器: 把 onnxruntime-directml 换成 onnxruntime（CPU 版）即可，代码自动回退。
+onnxruntime-directml>=1.19
+onnx>=1.16
+numpy
+sounddevice
+soundfile
+torchfcpe

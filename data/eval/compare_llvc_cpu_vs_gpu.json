@@ -1,0 +1,21 @@
+{
+  "baseline": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\rvc_gpu_smoke.wav",
+  "candidate": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\llvc_cpu_smoke.wav",
+  "sample_rate": 16000,
+  "lag_samples": -436,
+  "lag_ms": -27.25,
+  "aligned_length_samples": 7564,
+  "aligned_length_sec": 0.47275,
+  "metrics": {
+    "wave_mae": 0.015741225332021713,
+    "wave_rmse": 0.037307411432266235,
+    "si_sdr_db": -11.871840723334445,
+    "logmel_l1": 15.988140106201172,
+    "logmel_l2": 19.362821578979492,
+    "mcd": 1184.7517700803683,
+    "f0_rmse_hz": null,
+    "voiced_ratio_reference": 0.0,
+    "voiced_ratio_candidate": 0.5,
+    "voiced_overlap_ratio": 0.0
+  }
+}

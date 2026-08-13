@@ -1,0 +1,23 @@
+{
+  "baseline": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\batch_short_v2\\01_1272-135031-0004\\rvc_gpu.wav",
+  "candidate": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\batch_short_v2\\01_1272-135031-0004\\llvc_cpu.wav",
+  "sample_rate": 16000,
+  "lag_samples": 15798,
+  "lag_ms": 987.375,
+  "aligned_length_samples": 51802,
+  "aligned_length_sec": 3.237625,
+  "metrics": {
+    "wave_mae": 0.04247182607650757,
+    "wave_rmse": 0.05961131677031517,
+    "si_sdr_db": -25.586183919193992,
+    "logmel_l1": 19.640220642089844,
+    "logmel_l2": 23.939882278442383,
+    "mcd": 1455.5814037310004,
+    "f0_rmse_hz": 757.8336083386374,
+    "f0_corr": -0.034918828679383056,
+    "pyin_voiced_ratio_reference": 0.009852216748768473,
+    "pyin_voiced_ratio_candidate": 0.7536945812807881,
+    "pyin_voiced_overlap_ratio": 0.009852216748768473,
+    "yin_voiced_overlap_ratio": 0.9950738916256158
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "engine": "llvc_streaming",
+  "device": "cpu",
+  "wav": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\LibriSpeech\\dev-clean-2\\1272\\135031\\1272-135031-0000.flac",
+  "out": "E:\\Projects\\Retrieval-based-Voice-Conversion-WebUI\\data\\eval\\batch_long_v2\\00_1272-135031-0000\\llvc_cpu.wav",
+  "sample_rate": 16000,
+  "chunk_factor": 2,
+  "chunk_len": 416,
+  "chunks": 419,
+  "avg_ms": 89.26282457780617,
+  "p95_ms": 94.43859974853694,
+  "rtf": 0.29127467255236844,
+  "realtime_ok": false
+}

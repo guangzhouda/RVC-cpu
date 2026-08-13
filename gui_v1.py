@@ -773,6 +773,7 @@ if __name__ == "__main__":
                 dtype=torch.float32,
             )
             self.rms_buffer: np.ndarray = np.zeros(4 * self.zc, dtype="float32")
+            self.out_block_count: int = 0
             self.sola_buffer: torch.Tensor = torch.zeros(
                 self.sola_buffer_frame, device=self.config.device, dtype=torch.float32
             )
@@ -853,6 +854,8 @@ if __name__ == "__main__":
             """
             global flag_vc
             start_time = time.perf_counter()
+            if status:
+                printt("stream status:", status)
             indata = librosa.to_mono(indata.T)
             if self.gui_config.threhold > -60:
                 indata = np.append(self.rms_buffer, indata)
@@ -1002,6 +1005,13 @@ if __name__ == "__main__":
                 .cpu()
                 .numpy()
             )
+            self.out_block_count += 1
+            if self.out_block_count % 100 == 0:
+                printt(
+                    "out rms = %.5f  (blocks=%d)",
+                    float(infer_wav[: self.block_frame].abs().mean()),
+                    self.out_block_count,
+                )
             total_time = time.perf_counter() - start_time
             if flag_vc:
                 self.window["infer_time"].update(int(total_time * 1000))

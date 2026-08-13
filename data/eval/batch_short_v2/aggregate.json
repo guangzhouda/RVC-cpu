@@ -1,0 +1,48 @@
+{
+  "summary_path": "data\\eval\\batch_short_v2\\summary.json",
+  "num_samples": 5,
+  "duration_sec_mean": 4.35,
+  "duration_sec_median": 4.225,
+  "rvc_gpu": {
+    "count": 5,
+    "avg_ms_mean": 75.51902992742173,
+    "avg_ms_median": 79.72401761285522,
+    "p95_ms_mean": 90.34253603778777,
+    "rtf_mean": 3.620844111695798,
+    "realtime_ok_count": 5
+  },
+  "rvc_cpu": {
+    "count": 5,
+    "avg_ms_mean": 1111.9170721525363,
+    "avg_ms_median": 1209.1656889145572,
+    "p95_ms_mean": 1146.7290180176497,
+    "rtf_mean": 0.23590772046548847,
+    "realtime_ok_count": 0
+  },
+  "llvc_cpu": {
+    "count": 5,
+    "avg_ms_mean": 75.9543771458697,
+    "avg_ms_median": 86.90074661266675,
+    "p95_ms_mean": 80.37268384359777,
+    "rtf_mean": 0.35657389525068306,
+    "realtime_ok_count": 0
+  },
+  "compare_rvc_cpu_vs_gpu": {
+    "count": 5,
+    "wave_rmse_mean": 0.04979662001132965,
+    "logmel_l1_mean": 1.210393214225769,
+    "mcd_mean": 83.77324003745062,
+    "f0_rmse_hz_mean": 393.61896720064965,
+    "f0_corr_mean": 0.7735364613106306,
+    "si_sdr_db_mean": -9.224295676075362
+  },
+  "compare_llvc_cpu_vs_gpu": {
+    "count": 5,
+    "wave_rmse_mean": 0.061437582969665526,
+    "logmel_l1_mean": 16.41244297027588,
+    "mcd_mean": 1212.8229440006114,
+    "f0_rmse_hz_mean": 681.5710578543257,
+    "f0_corr_mean": 0.15570840512442413,
+    "si_sdr_db_mean": -28.075240656937538
+  }
+}
