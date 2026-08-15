@@ -73,6 +73,14 @@
 - DML vs CPU（同一 ONNX）：解码器 maxdiff 9e-7、HuBERT 6e-5，corr 1.0；
 - RMVPE ONNX vs torch：f0 逐帧 maxdiff 6e-5 Hz，corr 1.0。
 
+## 七、跨机器使用注意（重要）
+
+DML 的提速幅度**取决于机器的核显/独显算力**：本机 Radeon 780M（较强核显）解码器从 158ms 降到 14ms，但老旧 Intel UHD / 入门 Vega 核显可能只有 1.5~2x，甚至因 GPU 不支持部分算子（STFT、ConvTranspose、动态形状）导致大量 CPU 回退而更慢。
+
+--provider auto（默认）会在启动时用解码器小模型快速对拍 CPU 与 DML 的实际速度（约几秒，不需加载大模型），自动选择更快的后端并打印基准结果。必要时也可手动指定 --provider dml 或 --provider cpu。
+
+建议在其他机器上首次运行时保持 --provider auto，观察打印的 [auto] 解码器基准: cpu=X dml=Y，若 Y 明显更大说明该卡不适应 DML，程序会自动用 CPU（纯 CPU ONNX 路径在本机 RTF 1.16，仍为实时）。
+
 ## 六、已知限制与后续
 
 - 延迟体感 = 块大小（150/250ms）+ 声卡缓冲；更低延迟需更小块重导出并验证。

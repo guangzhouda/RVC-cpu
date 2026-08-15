@@ -310,6 +310,48 @@ def run_live(engine, in_device, out_device, latency="high", wasapi_exclusive=Fal
         printt("已停止")
 
 
+def bench_provider(onnx_path, meta_path, threshold=1.3, runs=8):
+    """快速对比 CPU 与 DML 的实际推理速度（只用解码器小模型），返回选中的 provider。
+
+    auto 模式下启动时调用；避免在核显不给力的机器上盲目用 DML 反而变慢。
+    """
+    if "DmlExecutionProvider" not in ort.get_available_providers():
+        printt("[auto] DirectML 不可用，使用 CPU")
+        return "cpu"
+    import json as _json
+    meta = _json.load(open(meta_path, encoding="utf-8"))
+    inputs = meta["inputs"]
+    rng = np.random.default_rng(0)
+    feed = {}
+    for k, v in inputs.items():
+        if k in ("phone", "pitchf", "rnd"):
+            feed[k] = rng.standard_normal(v).astype(np.float32)
+        elif k in ("phone_lengths", "pitch", "sid"):
+            feed[k] = np.zeros(v, dtype=np.int64)
+
+    def time_ep(providers, intra=None):
+        so = ort.SessionOptions()
+        if intra is not None and providers[0] == "CPUExecutionProvider":
+            so.intra_op_num_threads = intra
+        sess = ort.InferenceSession(onnx_path, sess_options=so, providers=providers)
+        sess.run(None, feed)  # warmup（DML 首次会编译着色器，计入本次）
+        ts = []
+        for _ in range(runs):
+            t0 = time.perf_counter()
+            sess.run(None, feed)
+            ts.append((time.perf_counter() - t0) * 1000)
+        return float(np.mean(ts)), float(np.percentile(ts, 95))
+
+    cpu_ms, cpu_p95 = time_ep(["CPUExecutionProvider"], intra=8)
+    dml_ms, dml_p95 = time_ep(["DmlExecutionProvider", "CPUExecutionProvider"])
+    printt("[auto] 解码器基准: cpu=%.0fms  dml=%.0fms" % (cpu_ms, dml_ms))
+    if dml_ms < cpu_ms / threshold:
+        printt("[auto] 使用 DirectML（核显）")
+        return "dml"
+    printt("[auto] DML 未显著快于 CPU，使用纯 CPU（更稳）")
+    return "cpu"
+
+
 def main():
     ap = argparse.ArgumentParser(description="RVC 实时变声（ONNX + DML/CPU）")
     ap.add_argument("--hubert", default="assets/hubert/_exp_hubert.onnx")
@@ -340,6 +382,8 @@ def main():
         printt(sd.query_devices())
         return
 
+    if args.provider == "auto":
+        args.provider = bench_provider(args.onnx, args.meta)
     os.chdir(ROOT)
     torch.set_num_threads(1)  # torch 侧（fcpe/resample/SOLA）单线程；ORT 自行管理线程
 
