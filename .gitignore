@@ -25,5 +25,14 @@ rmvpe.pt
 
 /runtime
 /assets/weights/*
+/data/eval/
+/data/test_data/
 ffmpeg.*
 ffprobe.*
+# --- 本地构建/缓存（DSH 会话）---
+.omx/
+.pi/
+tools/_wheels/
+cpp/build/
+# --- Trellis 个人 workspace journal（不进共享分支）---
+.trellis/workspace/

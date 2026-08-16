@@ -18,6 +18,9 @@ from random import randint, shuffle
 
 import torch
 
+# 兼容提示：torch 2.4.0 Windows wheel 需要 USE_LIBUV=0 环境变量
+# （train_cli.py 已自动设置；手动跑 train.py 时请自行 export）。
+
 try:
     import intel_extension_for_pytorch as ipex  # pylint: disable=import-error, unused-import
 
